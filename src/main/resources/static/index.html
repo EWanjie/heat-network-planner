@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Планировщик теплосети</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 32px 16px;
+            font-family: Arial, sans-serif;
+            color: #17233b;
+            background: #f2f5fa;
+        }
+
+        main {
+            max-width: 680px;
+            margin: 40px auto;
+            padding: 32px;
+            border-radius: 16px;
+            background: white;
+        }
+
+        h1 {
+            margin-top: 0;
+            font-size: 28px;
+        }
+
+        p {
+            line-height: 1.6;
+        }
+
+        label {
+            display: block;
+            margin: 24px 0 12px;
+            font-weight: bold;
+        }
+
+        input {
+            display: block;
+            width: 100%;
+        }
+
+        button {
+            margin-top: 24px;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            color: white;
+            background: #2457d6;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            background: #68758d;
+            cursor: not-allowed;
+        }
+
+        #fileInfo {
+            overflow-wrap: anywhere;
+        }
+
+        #status {
+            min-height: 24px;
+        }
+    </style>
+</head>
+
+<body>
+<main>
+    <h1>Планировщик теплосети</h1>
+
+    <p>
+        Выберите GeoJSON с данными зданий,
+        существующей теплосети и пространственных ограничений.
+    </p>
+
+    <form id="uploadForm">
+        <label for="geojsonFile">Файл исходных данных</label>
+
+        <input
+                id="geojsonFile"
+                name="file"
+                type="file"
+                accept=".geojson,.json"
+                aria-describedby="fileInfo"
+                required
+        >
+
+        <p id="fileInfo">Файл пока не выбран.</p>
+
+        <button id="uploadButton" type="submit" disabled>
+            Загрузить и проверить
+        </button>
+    </form>
+
+    <p id="status" role="status" aria-live="polite"></p>
+</main>
+
+<script>
+    const form = document.getElementById("uploadForm");
+    const fileInput = document.getElementById("geojsonFile");
+    const fileInfo = document.getElementById("fileInfo");
+    const uploadButton = document.getElementById("uploadButton");
+    const status = document.getElementById("status");
+
+    let resultShown = false;
+
+    fileInput.addEventListener("change", function () {
+        const file = fileInput.files[0];
+
+        status.textContent = "";
+        resultShown = false; // выбрали новый файл — предыдущий результат больше не актуален
+
+        if (!file) {
+            fileInfo.textContent = "Файл пока не выбран.";
+            uploadButton.disabled = true;
+            return;
+        }
+
+        const sizeKb = (file.size / 1024).toFixed(1);
+
+        fileInfo.textContent =
+            "Выбран: " + file.name + " — " + sizeKb + " КБ";
+
+        uploadButton.disabled = false;
+    });
+
+    window.addEventListener("beforeunload", function (event) {
+        if (!resultShown) {
+            return;
+        }
+        event.preventDefault();
+        event.returnValue = "";
+    });
+
+    form.addEventListener("submit", function (event) {
+        event.preventDefault();
+
+        const file = fileInput.files[0];
+        const formData = new FormData();
+        formData.append("file", file);
+
+        status.textContent = "Загружаю и проверяю...";
+        uploadButton.disabled = true;
+
+        fetch("/api/upload", {
+            method: "POST",
+            body: formData
+        })
+            .then(function (response) {
+                if (!response.ok) {
+                    return response.text().then(function (text) {
+                        throw new Error(text);
+                    });
+                }
+                return response.json();
+            })
+            .then(function (result) {
+                status.textContent =
+                    "Объектов: " + result.totalObjects +
+                    ". Типы: " + JSON.stringify(result.typeCounts);
+                resultShown = true; // вот теперь результат на экране — предупреждаем при уходе
+            })
+            .catch(function (error) {
+                status.textContent = "Ошибка: " + error.message;
+            })
+            .finally(function () {
+                uploadButton.disabled = false;
+            });
+    });
+</script>
+</body>
+</html>
