@@ -29,6 +29,7 @@ public class GeoJsonInspector {
         public long totalObjects;
         public Map<String, Long> typeCounts;
         public Map<String, Long> restrictionCounts;
+        public ExistingNetworkBuilder.NetworkSummary network;
     }
 
     public static void main(String[] args) {
@@ -51,6 +52,7 @@ public class GeoJsonInspector {
         Map<String, Long> types = new TreeMap<>();
         Map<String, Long> restrictions = new TreeMap<>();
         Set<String> seenIds = new HashSet<>();
+        ExistingNetworkBuilder networkBuilder = new ExistingNetworkBuilder();
         long total = 0;
         boolean featuresFound = false;
         String rootType = null;
@@ -100,6 +102,7 @@ public class GeoJsonInspector {
                                     "Нет restriction_type у Feature #" + (total + 1));
                             restrictions.merge(restriction.asText(), 1L, Long::sum);
                         }
+                        networkBuilder.add(feature, type.asText(), id, total + 1);
                         total++;
                     }
                 } else {
@@ -116,6 +119,7 @@ public class GeoJsonInspector {
         result.totalObjects = total;
         result.typeCounts = types;
         result.restrictionCounts = restrictions;
+        result.network = networkBuilder.build();
         return result;
     }
 
@@ -127,6 +131,13 @@ public class GeoJsonInspector {
         result.typeCounts.forEach((type, count) -> System.out.println("  " + type + ": " + count));
         System.out.println("\nТипы ограничений:");
         result.restrictionCounts.forEach((type, count) -> System.out.println("  " + type + ": " + count));
+        ExistingNetworkBuilder.NetworkSummary net = result.network;
+        System.out.println("\nСуществующая сеть:");
+        System.out.println("  источников: " + net.sources + ", участков: " + net.segments
+                + ", камер: " + net.chambers + ", максимальная глубина цепочки: " + net.maxDepth);
+        net.objectsPerSource.forEach((source, count) ->
+                System.out.println("  от источника " + source + " питается объектов: " + count));
+        net.warnings.forEach(w -> System.out.println("  Предупреждение: " + w));
     }
 
     private static void require(boolean condition, String message) throws GeoJsonValidationException {

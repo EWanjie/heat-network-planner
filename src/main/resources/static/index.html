@@ -68,6 +68,7 @@
 
         #status {
             min-height: 24px;
+            white-space: pre-line;
         }
     </style>
 </head>
@@ -165,7 +166,12 @@
             .then(function (result) {
                 status.textContent =
                     "Объектов: " + result.totalObjects +
-                    ". Типы: " + JSON.stringify(result.typeCounts);
+                    ". Типы: " + JSON.stringify(result.typeCounts) +
+                    "\nСуществующая сеть: источников " + result.network.sources +
+                    ", участков " + result.network.segments +
+                    ", камер " + result.network.chambers +
+                    ", глубина цепочки " + result.network.maxDepth +
+                    result.network.warnings.map(function (w) { return "\nПредупреждение: " + w; }).join("");
                 resultShown = true; // вот теперь результат на экране — предупреждаем при уходе
             })
             .catch(function (error) {
