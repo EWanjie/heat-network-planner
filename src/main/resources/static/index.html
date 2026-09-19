@@ -450,6 +450,7 @@
                     ", участков " + result.network.segments +
                     ", камер " + result.network.chambers +
                     ", глубина цепочки " + result.network.maxDepth +
+                    " (связи: " + (result.network.linksMode === "geometry" ? "по геометрии" : "из атрибутов") + ")" +
                     result.network.warnings.map(function (w) { return "\nПредупреждение: " + w; }).join("");
                 resultShown = true; // вот теперь результат на экране — предупреждаем при уходе
                 showMapFor(file);

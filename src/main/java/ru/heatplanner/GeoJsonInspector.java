@@ -13,7 +13,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 
-/** Первый этап: чтение и инвентаризация, а не полный валидатор задания. */
+/**
+ * Первый этап обработки: потоковое чтение GeoJSON, проверка структуры и инвентаризация объектов.
+ * Это не полный валидатор задания: проверяет только общую структуру и id/тип объектов,
+ * а данные существующей сети (диаметры, связи) передаёт в {@link ExistingNetworkBuilder}.
+ */
 public class GeoJsonInspector {
 
     /** Ошибка структуры или содержимого GeoJSON — не ошибка ввода-вывода. */
@@ -27,11 +31,15 @@ public class GeoJsonInspector {
     public static class InspectionResult {
         public long fileSizeBytes;
         public long totalObjects;
+        /** Сколько объектов каждого object_type. */
         public Map<String, Long> typeCounts;
+        /** Сколько ограничений каждого restriction_type. */
         public Map<String, Long> restrictionCounts;
+        /** Сводка по существующей сети (см. ExistingNetworkBuilder). */
         public ExistingNetworkBuilder.NetworkSummary network;
     }
 
+    /** Запуск из командной строки или IDE: путь к файлу — единственный аргумент. Нужен для ручных проверок. */
     public static void main(String[] args) {
         if (args.length != 1) {
             System.err.println("Укажите путь к GeoJSON в Program arguments, в двойных кавычках.");
@@ -46,18 +54,25 @@ public class GeoJsonInspector {
         }
     }
 
+    /**
+     * Читает файл за один проход и возвращает сводку.
+     * Бросает {@link GeoJsonValidationException}, если структура или данные не проходят проверку.
+     */
     public static InspectionResult inspect(Path path) throws IOException {
         ObjectMapper mapper = new ObjectMapper();
+        // Повторяющийся ключ внутри одного JSON-объекта — ошибка, а не «победит последний».
         mapper.enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
         Map<String, Long> types = new TreeMap<>();
         Map<String, Long> restrictions = new TreeMap<>();
         Set<String> seenIds = new HashSet<>();
+        // Получает объекты существующей сети по ходу чтения; результат забираем в конце.
         ExistingNetworkBuilder networkBuilder = new ExistingNetworkBuilder();
         long total = 0;
         boolean featuresFound = false;
         String rootType = null;
 
         try (JsonParser parser = mapper.getFactory().createParser(path.toFile())) {
+            // Обходим корневой объект по полям: type, features, а всё остальное (name, crs) пропускаем.
             require(parser.nextToken() == JsonToken.START_OBJECT, "Корень JSON должен быть объектом.");
             while (parser.nextToken() != JsonToken.END_OBJECT) {
                 require(parser.currentToken() == JsonToken.FIELD_NAME, "Ожидалось поле корневого объекта.");
@@ -72,6 +87,7 @@ public class GeoJsonInspector {
                     while (parser.nextToken() != JsonToken.END_ARRAY) {
                         require(parser.currentToken() == JsonToken.START_OBJECT,
                                 "Feature #" + (total + 1) + " должен быть объектом.");
+                        // Потоковое чтение: в памяти одновременно только один Feature, а не весь файл (файлы до 3 ГБ).
                         JsonNode feature = mapper.readTree(parser);
                         require("Feature".equals(feature.path("type").asText()),
                                 "Неверный type у Feature #" + (total + 1));
@@ -102,6 +118,7 @@ public class GeoJsonInspector {
                                     "Нет restriction_type у Feature #" + (total + 1));
                             restrictions.merge(restriction.asText(), 1L, Long::sum);
                         }
+                        // source, heat_network и heat_chamber уходят в построение графа сети, остальные типы билдер игнорирует.
                         networkBuilder.add(feature, type.asText(), id, total + 1);
                         total++;
                     }
@@ -119,10 +136,12 @@ public class GeoJsonInspector {
         result.totalObjects = total;
         result.typeCounts = types;
         result.restrictionCounts = restrictions;
+        // Файл прочитан целиком — теперь можно проверить связи сети (ссылки, циклы, доступность источника).
         result.network = networkBuilder.build();
         return result;
     }
 
+    /** Печать сводки в консоль — только для запуска через main. */
     private static void printResult(String pathText, InspectionResult result) {
         System.out.println("Файл: " + pathText);
         System.out.println("Размер, байт: " + result.fileSizeBytes);
@@ -134,12 +153,14 @@ public class GeoJsonInspector {
         ExistingNetworkBuilder.NetworkSummary net = result.network;
         System.out.println("\nСуществующая сеть:");
         System.out.println("  источников: " + net.sources + ", участков: " + net.segments
-                + ", камер: " + net.chambers + ", максимальная глубина цепочки: " + net.maxDepth);
+                + ", камер: " + net.chambers + ", максимальная глубина цепочки: " + net.maxDepth
+                + ", связи: " + net.linksMode);
         net.objectsPerSource.forEach((source, count) ->
                 System.out.println("  от источника " + source + " питается объектов: " + count));
         net.warnings.forEach(w -> System.out.println("  Предупреждение: " + w));
     }
 
+    /** Короткая проверка условия: если не выполнено — исключение с понятным сообщением. */
     private static void require(boolean condition, String message) throws GeoJsonValidationException {
         if (!condition) {
             throw new GeoJsonValidationException(message);

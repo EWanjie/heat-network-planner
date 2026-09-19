@@ -10,9 +10,14 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+/** REST-вход сервиса: принимает GeoJSON от страницы и возвращает результат проверки. */
 @RestController
 public class UploadController {
 
+    /**
+     * POST /api/upload, поле формы "file".
+     * 200 — JSON со сводкой (InspectionResult); 400 — текст причины, если файл пуст или не прошёл проверку.
+     */
     @PostMapping("/api/upload")
     public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file) throws IOException {
         if (file.isEmpty()) {
