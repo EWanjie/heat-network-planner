@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Планировщик теплосети</title>
+    <link rel="stylesheet" href="lib/leaflet/leaflet.css">
 
     <style>
         * {
@@ -35,18 +36,18 @@
             line-height: 1.6;
         }
 
-        label {
+        form label {
             display: block;
             margin: 24px 0 12px;
             font-weight: bold;
         }
 
-        input {
+        input[type="file"] {
             display: block;
             width: 100%;
         }
 
-        button {
+        form button {
             margin-top: 24px;
             padding: 12px 20px;
             border: none;
@@ -57,7 +58,7 @@
             cursor: pointer;
         }
 
-        button:disabled {
+        form button:disabled {
             background: #68758d;
             cursor: not-allowed;
         }
@@ -70,9 +71,78 @@
             min-height: 24px;
             white-space: pre-line;
         }
+
+        #mapSection {
+            max-width: 1200px;
+            margin: 0 auto 40px;
+            padding: 24px;
+            border-radius: 16px;
+            background: white;
+        }
+
+        #mapSection[hidden] {
+            display: none;
+        }
+
+        #mapSection h2 {
+            margin: 0 0 12px;
+            font-size: 20px;
+        }
+
+        #map {
+            height: 620px;
+            border-radius: 8px;
+            border: 1px solid #d5dbe6;
+        }
+
+        #mapNote {
+            margin: 12px 0 0;
+            font-size: 14px;
+            color: #4a5670;
+        }
+
+        .swatch {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            margin-right: 6px;
+            vertical-align: -2px;
+            border: 1px solid rgba(0, 0, 0, 0.35);
+        }
+
+        .swatch.line {
+            height: 0;
+            border-width: 2px 0 0;
+            vertical-align: 3px;
+        }
+
+        .swatch.dot {
+            border-radius: 50%;
+        }
+
+        .popup-table {
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .popup-table td {
+            padding: 2px 8px 2px 0;
+            vertical-align: top;
+        }
+
+        .popup-table td:first-child {
+            color: #68758d;
+        }
     </style>
 </head>
 
+<!--
+    Устройство страницы:
+      1. <main>        — форма загрузки GeoJSON и текст с результатом проверки (ответ сервера /api/upload).
+      2. <section id="mapSection"> — карта исходных данных, появляется только после успешной проверки.
+      3. <script>      — вся логика: выбор файла, отправка на сервер, построение карты (Leaflet).
+    Сервер только проверяет файл; карта строится в браузере из того же файла.
+-->
 <body>
 <main>
     <h1>Планировщик теплосети</h1>
@@ -104,15 +174,28 @@
     <p id="status" role="status" aria-live="polite"></p>
 </main>
 
+<!-- Карта. Скрыта (hidden), пока нет успешно проверенного файла; в #map Leaflet рисует подложку и слои. -->
+<section id="mapSection" hidden>
+    <h2>Карта исходных данных</h2>
+    <div id="map"></div>
+    <p id="mapNote">Слои включаются и выключаются в правом верхнем углу карты. Клик по объекту показывает его атрибуты.</p>
+</section>
+
+<!-- Leaflet — библиотека карт; лежит в проекте (static/lib/leaflet), а не грузится с CDN. Даёт глобальный объект L. -->
+<script src="lib/leaflet/leaflet.js"></script>
 <script>
+    // ---------- Форма загрузки ----------
+    // Ссылки на элементы страницы.
     const form = document.getElementById("uploadForm");
     const fileInput = document.getElementById("geojsonFile");
     const fileInfo = document.getElementById("fileInfo");
     const uploadButton = document.getElementById("uploadButton");
     const status = document.getElementById("status");
 
+    // true, когда на экране результат проверки: тогда при закрытии вкладки браузер предупредит о потере результата.
     let resultShown = false;
 
+    // Выбор файла: показываем имя и размер, включаем кнопку «Загрузить и проверить».
     fileInput.addEventListener("change", function () {
         const file = fileInput.files[0];
 
@@ -141,6 +224,202 @@
         event.returnValue = "";
     });
 
+    // ---------- Карта ----------
+    // Порядок работы: submit формы -> сервер проверяет файл -> при успехе showMapFor(file)
+    //   -> renderMap(geojson): группировка объектов по типам -> buildLayer() на каждый тип -> легенда и масштаб.
+    //
+    // Файл читается прямо в браузере. Для больших файлов (гигабайты) так нельзя —
+    // там нужна отдача с сервера по фрагментам карты, это отдельный шаг.
+    const MAX_PREVIEW_BYTES = 100 * 1024 * 1024;
+
+    const mapSection = document.getElementById("mapSection");
+    const mapNote = document.getElementById("mapNote");
+    const MAP_HINT = "Слои включаются и выключаются в правом верхнем углу карты. Клик по объекту показывает его атрибуты.";
+
+    // Как рисовать каждый тип объектов: подпись, цвет, вид значка в легенде.
+    // Ключ — object_type, а для ограничений "restriction:<restriction_type>" (см. layerKey).
+    // swatch: "dot" — кружок, "line" — линия, "box" — квадрат; dash — пунктир для линейных ограничений.
+    // Порядок ключей задаёт порядок слоёв в легенде. Неизвестные типы рисуются серым (FALLBACK_STYLE).
+    const LAYER_STYLES = {
+        "source":               {label: "Источник теплоснабжения",   color: "#d62828", swatch: "dot"},
+        "heat_network":         {label: "Существующая тепловая сеть", color: "#2457d6", swatch: "line"},
+        "heat_chamber":         {label: "Тепловая камера",           color: "#f77f00", swatch: "dot"},
+        "oks_future":           {label: "Перспективный ОКС",         color: "#2a9d3f", swatch: "box"},
+        "oks_connection_point": {label: "Точка подключения ОКС",     color: "#0b5d1e", swatch: "dot"},
+        "oks_existing":         {label: "Существующий ОКС",          color: "#8d99ae", swatch: "box"},
+        "restriction:road":              {label: "Ограничение: дорога",           color: "#4a4e57", swatch: "box"},
+        "restriction:tram_tracks":       {label: "Ограничение: трамвайные пути",  color: "#7b6d8d", swatch: "box"},
+        "restriction:gas_pipeline":      {label: "Ограничение: газопровод",       color: "#e9c46a", swatch: "line", dash: "8 6"},
+        "restriction:power_cable":        {label: "Ограничение: силовой кабель",   color: "#9b5de5", swatch: "line", dash: "8 6"},
+        "restriction:water":             {label: "Ограничение: водный объект",    color: "#4cc9f0", swatch: "box"},
+        "restriction:oks":               {label: "Ограничение: существующие ОКС", color: "#adb5bd", swatch: "box"},
+        "restriction:railway":           {label: "Ограничение: железная дорога",  color: "#6d4c41", swatch: "box"},
+        "restriction:park":              {label: "Ограничение: парк",             color: "#95d5b2", swatch: "box"},
+        "restriction:social_area":       {label: "Ограничение: соц. территория",  color: "#f4a6c1", swatch: "box"},
+        "restriction:prohibited_site":   {label: "Ограничение: запрещённая территория", color: "#ff006e", swatch: "box"}
+    };
+    const FALLBACK_STYLE = {label: "Прочее", color: "#555555", swatch: "box"};
+
+    // Состояние карты: сама карта создаётся один раз, слои и легенда пересоздаются при каждой новой загрузке.
+    let map = null;
+    let mapLayers = [];
+    let layersControl = null;
+
+    // К какому слою относится объект: по object_type, а ограничения делятся ещё и по restriction_type.
+    function layerKey(feature) {
+        const props = feature.properties || {};
+        return props.object_type === "restriction"
+            ? "restriction:" + props.restriction_type
+            : props.object_type;
+    }
+
+    // Стиль слоя по ключу; для типа, которого нет в таблице, — серый с подписью из самого ключа.
+    function styleFor(key) {
+        if (LAYER_STYLES[key]) {
+            return LAYER_STYLES[key];
+        }
+        const base = Object.assign({}, FALLBACK_STYLE);
+        base.label = key.indexOf("restriction:") === 0 ? "Ограничение: " + key.slice(12) : key;
+        return base;
+    }
+
+    // Экранирует спецсимволы: атрибуты берутся из загруженного файла и попадают в HTML попапа и легенды.
+    function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, function (ch) {
+            return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[ch];
+        });
+    }
+
+    // Содержимое всплывающего окна по клику на объект: таблица «атрибут — значение».
+    function popupHtml(props) {
+        const rows = Object.keys(props || {}).map(function (name) {
+            return "<tr><td>" + escapeHtml(name) + "</td><td>" + escapeHtml(props[name]) + "</td></tr>";
+        }).join("");
+        return '<table class="popup-table">' + rows + "</table>";
+    }
+
+    // Цветной значок для легенды (кружок, линия или квадрат — как объект выглядит на карте).
+    function swatchHtml(style) {
+        if (style.swatch === "line") {
+            return '<span class="swatch line" style="border-color:' + style.color + '"></span>';
+        }
+        return '<span class="swatch ' + (style.swatch === "dot" ? "dot" : "") +
+            '" style="background:' + style.color + '"></span>';
+    }
+
+    // Один слой карты: все объекты одного типа с общим стилем.
+    // Leaflet сам понимает GeoJSON; здесь задаём, как рисовать точки, линии и полигоны.
+    function buildLayer(key, features) {
+        const style = styleFor(key);
+        return L.geoJSON({type: "FeatureCollection", features: features}, {
+            // Точки (источник, камеры, точки подключения) — кружки; источник крупнее остальных.
+            pointToLayer: function (feature, latlng) {
+                const radius = feature.properties.object_type === "source" ? 9 : 6;
+                return L.circleMarker(latlng, {
+                    radius: radius, color: "#ffffff", weight: 1.5,
+                    fillColor: style.color, fillOpacity: 1
+                });
+            },
+            // Линии и полигоны. Толщина линии растёт с диаметром трубы (от 3 до 10 пикселей);
+            // полигоны — контур и полупрозрачная заливка того же цвета.
+            style: function (feature) {
+                if (feature.geometry.type.indexOf("Line") !== -1) {
+                    const d = Number(feature.properties.diameter) || 0;
+                    return {
+                        color: style.color,
+                        weight: d ? Math.max(3, Math.min(10, 2 + d / 100)) : 3,
+                        dashArray: style.dash || null
+                    };
+                }
+                return {color: style.color, weight: 2, fillColor: style.color, fillOpacity: 0.35};
+            },
+            // Клик по любому объекту открывает окно с его атрибутами.
+            onEachFeature: function (feature, layer) {
+                layer.bindPopup(popupHtml(feature.properties));
+            }
+        });
+    }
+
+    // Строит карту целиком по разобранному GeoJSON: подложка, слои по типам, легенда, масштаб под данные.
+    function renderMap(geojson) {
+        // Блок нужно показать до создания карты: в скрытом блоке Leaflet запомнит размер 0x0.
+        mapSection.hidden = false;
+        // Карта и подложка (плитки OpenStreetMap, нужен интернет) создаются один раз.
+        if (!map) {
+            map = L.map("map");
+            L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+                maxZoom: 19,
+                attribution: "&copy; участники OpenStreetMap"
+            }).addTo(map);
+        }
+        // Новая загрузка: убираем слои и легенду от предыдущего файла.
+        mapLayers.forEach(function (layer) { map.removeLayer(layer); });
+        mapLayers = [];
+        if (layersControl) {
+            map.removeControl(layersControl);
+        }
+
+        // Группируем объекты по типам: один тип — один слой.
+        const groups = {};
+        geojson.features.forEach(function (feature) {
+            const key = layerKey(feature);
+            (groups[key] = groups[key] || []).push(feature);
+        });
+
+        // Порядок отрисовки: сначала полигоны, поверх них линии, сверху точки — чтобы мелкое не пряталось под крупным.
+        // Внутри группы слои идут в порядке LAYER_STYLES (он же порядок в легенде).
+        const order = Object.keys(LAYER_STYLES);
+        const keys = Object.keys(groups).sort(function (a, b) {
+            const ia = order.indexOf(a), ib = order.indexOf(b);
+            return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+        });
+        const zOrder = keys.filter(function (k) { return groups[k][0].geometry.type.indexOf("Polygon") !== -1; })
+            .concat(keys.filter(function (k) { return groups[k][0].geometry.type.indexOf("Line") !== -1; }))
+            .concat(keys.filter(function (k) { return groups[k][0].geometry.type === "Point"; }));
+
+        // overlays — слои для легенды с чекбоксами: подпись (значок + название + число объектов) -> слой.
+        // bounds накапливает границы всех объектов, чтобы потом приблизить карту к данным.
+        const overlays = {};
+        const bounds = L.latLngBounds([]);
+        zOrder.forEach(function (key) {
+            const layer = buildLayer(key, groups[key]);
+            layer.addTo(map);
+            mapLayers.push(layer);
+            overlays[swatchHtml(styleFor(key)) + escapeHtml(styleFor(key).label) + " (" + groups[key].length + ")"] = layer;
+            if (layer.getBounds().isValid()) {
+                bounds.extend(layer.getBounds());
+            }
+        });
+
+        // Легенда всегда раскрыта; invalidateSize заставляет Leaflet пересчитать размер блока карты.
+        layersControl = L.control.layers(null, overlays, {collapsed: false}).addTo(map);
+        map.invalidateSize();
+        if (bounds.isValid()) {
+            map.fitBounds(bounds, {padding: [30, 30], maxZoom: 18});
+        }
+    }
+
+    // Точка входа для карты: читает выбранный файл и строит карту.
+    // Слишком большой файл или ошибка чтения не ломают страницу: карта скрывается, причина дописывается в статус.
+    function showMapFor(file) {
+        if (file.size > MAX_PREVIEW_BYTES) {
+            mapSection.hidden = true;
+            status.textContent += "\nКарта не показана: файл больше 100 МБ, для него нужна отдача с сервера.";
+            return;
+        }
+        file.text()
+            .then(function (text) {
+                renderMap(JSON.parse(text));
+                mapNote.textContent = MAP_HINT;
+            })
+            .catch(function (error) {
+                mapSection.hidden = true;
+                status.textContent += "\nКарту построить не удалось: " + error.message;
+            });
+    }
+
+    // Отправка формы: файл уходит на сервер (POST /api/upload). Сервер отвечает JSON со сводкой (200)
+    // или текстом ошибки (400). При успехе показываем сводку и строим карту, при ошибке — сообщение и скрытая карта.
     form.addEventListener("submit", function (event) {
         event.preventDefault();
 
@@ -173,9 +452,11 @@
                     ", глубина цепочки " + result.network.maxDepth +
                     result.network.warnings.map(function (w) { return "\nПредупреждение: " + w; }).join("");
                 resultShown = true; // вот теперь результат на экране — предупреждаем при уходе
+                showMapFor(file);
             })
             .catch(function (error) {
                 status.textContent = "Ошибка: " + error.message;
+                mapSection.hidden = true;
             })
             .finally(function () {
                 uploadButton.disabled = false;
