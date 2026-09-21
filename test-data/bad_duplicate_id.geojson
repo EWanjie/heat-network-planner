@@ -1,0 +1,14 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[37.6000,55.7500]},"properties":{"id":"src_1","object_type":"source"}},
+    {"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.6000,55.7500],[37.6020,55.7510]]},"properties":{"id":"net_1","object_type":"heat_network","diameter":300,"flow_tph":250.0,"upstream_object_id":"src_1"}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[37.6020,55.7510]},"properties":{"id":"ch_1","object_type":"heat_chamber","diameter":300,"upstream_object_id":"net_1"}},
+    {"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.6020,55.7510],[37.6040,55.7520]]},"properties":{"id":"net_1","object_type":"heat_network","diameter":200,"flow_tph":120.0,"upstream_object_id":"ch_1"}},
+    {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.6050,55.7530],[37.6055,55.7530],[37.6055,55.7534],[37.6050,55.7534],[37.6050,55.7530]]]},"properties":{"id":"oks_f1","object_type":"oks_future","flow_tph":80.0,"heat_load":6.5}},
+    {"type":"Feature","geometry":{"type":"Point","coordinates":[37.6050,55.7532]},"properties":{"id":"cp_1","object_type":"oks_connection_point","oks_id":"oks_f1"}},
+    {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.6070,55.7500],[37.6075,55.7500],[37.6075,55.7504],[37.6070,55.7504],[37.6070,55.7500]]]},"properties":{"id":"oks_e1","object_type":"oks_existing"}},
+    {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.6042,55.7521],[37.6046,55.7521],[37.6046,55.7529],[37.6042,55.7529],[37.6042,55.7521]]]},"properties":{"id":"road_1","object_type":"restriction","restriction_type":"road"}},
+    {"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.6030,55.7540],[37.6060,55.7525]]},"properties":{"id":"gas_1","object_type":"restriction","restriction_type":"gas_pipeline"}}
+  ]
+}

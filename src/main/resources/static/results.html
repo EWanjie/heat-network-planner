@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Моделирование трасс подключения к тепловым сетям</title>
+    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260921-guard5">
+    <link rel="stylesheet" href="/app.css?v=20260921-guard5">
+    <script src="/lib/openlayers/ol.js?v=20260921-guard5" defer></script>
+    <script src="/dataset-store.js?v=20260921-guard5" defer></script>
+    <script src="/schematic-basemap.js?v=20260921-guard5" defer></script>
+    <script src="/results.js?v=20260921-legend6" defer></script>
+</head>
+<body>
+<header class="topbar">
+    <h1 id="datasetName" class="dataset-name">Файл не загружен</h1>
+    <a class="button" href="/">Загрузить файл</a>
+</header>
+<div id="emptyState" class="empty-state" hidden>
+    <h2>Данные не загружены</h2><p id="emptyMessage">Сначала выберите GeoJSON на странице загрузки.</p><a class="button primary" href="/">Выбрать файл</a>
+</div>
+<main id="workspace" class="workspace" hidden>
+    <aside class="statistics" aria-label="Статистика файла">
+        <h2>Всего объектов</h2><p id="totalObjects" class="total"></p><p id="fileSize" class="muted"></p>
+        <h2>Состав данных</h2><ul id="typeCounts" class="counts"></ul>
+        <h2>Ограничения</h2><ul id="restrictionCounts" class="counts"></ul>
+    </aside>
+    <section aria-label="Карта объектов">
+        <div class="map-frame">
+            <div id="map" tabindex="0" aria-label="Карта объектов GeoJSON"></div>
+            <aside id="legend" class="legend" aria-label="Легенда и слои"><div id="legendItems"></div></aside>
+        </div>
+        <p id="tileStatus" class="status" role="status" aria-live="polite"></p>
+        <p id="mapStatus" class="status" role="status" aria-live="polite"></p>
+    </section>
+</main>
+</body>
+</html>
