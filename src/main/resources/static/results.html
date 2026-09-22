@@ -4,14 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Моделирование трасс подключения к тепловым сетям</title>
-    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260921-guard5">
-    <link rel="stylesheet" href="/app.css?v=20260921-guard5">
-    <script src="/lib/openlayers/ol.js?v=20260921-guard5" defer></script>
-    <script src="/dataset-store.js?v=20260921-guard5" defer></script>
-    <script src="/schematic-basemap.js?v=20260921-guard5" defer></script>
-    <script src="/results.js?v=20260921-legend6" defer></script>
+    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260922-export-placeholder5">
+    <link rel="stylesheet" href="/app.css?v=20260922-export-placeholder5">
+    <script src="/lib/openlayers/ol.js?v=20260922-export-placeholder5" defer></script>
+    <script src="/dataset-store.js?v=20260922-export-placeholder5" defer></script>
+    <script src="/schematic-basemap.js?v=20260922-export-placeholder5" defer></script>
+    <script src="/results.js?v=20260922-export-placeholder5" defer></script>
 </head>
-<body>
+<body class="results-page">
 <header class="topbar">
     <h1 id="datasetName" class="dataset-name">Файл не загружен</h1>
     <a class="button" href="/">Загрузить файл</a>
@@ -19,19 +19,29 @@
 <div id="emptyState" class="empty-state" hidden>
     <h2>Данные не загружены</h2><p id="emptyMessage">Сначала выберите GeoJSON на странице загрузки.</p><a class="button primary" href="/">Выбрать файл</a>
 </div>
-<main id="workspace" class="workspace" hidden>
-    <aside class="statistics" aria-label="Статистика файла">
-        <h2>Всего объектов</h2><p id="totalObjects" class="total"></p><p id="fileSize" class="muted"></p>
-        <h2>Состав данных</h2><ul id="typeCounts" class="counts"></ul>
-        <h2>Ограничения</h2><ul id="restrictionCounts" class="counts"></ul>
+<div id="resultsToolbar" class="results-toolbar" hidden>
+    <nav id="resultTabs" class="result-tabs" role="tablist" aria-label="Исходные данные и решения" hidden></nav>
+    <div class="export-slot">
+        <button id="exportButton" type="button" disabled hidden title="Выгрузка станет доступна после реализации расчёта">Выгрузить данные</button>
+    </div>
+</div>
+<main id="workspace" class="workspace" role="tabpanel" aria-labelledby="tab-input" hidden>
+    <aside class="statistics" aria-label="Справка" tabindex="0">
+        <div id="inputSummary">
+            <h2>Всего объектов</h2><p id="totalObjects" class="total"></p>
+            <h2 class="composition-heading">Состав данных</h2><ul id="typeCounts" class="counts"></ul>
+        </div>
+        <p id="solutionSummary" class="solution-placeholder" aria-live="polite" hidden></p>
     </aside>
-    <section aria-label="Карта объектов">
+    <section class="map-section" aria-label="Карта объектов">
         <div class="map-frame">
             <div id="map" tabindex="0" aria-label="Карта объектов GeoJSON"></div>
             <aside id="legend" class="legend" aria-label="Легенда и слои"><div id="legendItems"></div></aside>
         </div>
+        <div class="map-messages">
         <p id="tileStatus" class="status" role="status" aria-live="polite"></p>
         <p id="mapStatus" class="status" role="status" aria-live="polite"></p>
+        </div>
     </section>
 </main>
 </body>

@@ -21,6 +21,7 @@ const COLORS = {
 const BUILDINGS = new Set(["oks_existing", "oks_future", "restriction:oks"]);
 const TOP = new Set(["source", "heat_chamber", "oks_connection_point"]);
 const MAX_PREVIEW_BYTES = 100 * 1024 * 1024;
+let resetMapState = () => {};
 
 function labelFor(key) {
     return key.startsWith("restriction:") ? (RESTRICTION_LABELS[key.slice(12)] || key.slice(12)) : (OBJECT_LABELS[key] || key);
@@ -43,6 +44,80 @@ function countsInto(id, counts, labels) {
     }
     if (!list.children.length) list.textContent = "Нет объектов";
 }
+function renderInputSummary(summary) {
+    const counts = new Map();
+    function add(key, count) {
+        if (count > 0) counts.set(key, (counts.get(key) || 0) + count);
+    }
+    for (const [key, count] of Object.entries(summary.typeCounts || {})) {
+        if (key !== "restriction") add(key, count);
+    }
+    let classifiedRestrictions = 0;
+    for (const [key, count] of Object.entries(summary.restrictionCounts || {})) {
+        add(key === "oks" ? "oks_existing" : `restriction:${key}`, count);
+        classifiedRestrictions += count;
+    }
+    add("restriction", (summary.typeCounts?.restriction || 0) - classifiedRestrictions);
+    const order = ["oks_existing", "source", "heat_network", "heat_chamber", "oks_connection_point"];
+    const rank = key => order.includes(key) ? order.indexOf(key) : order.length;
+    const entries = [...counts].sort(([a], [b]) => rank(a) - rank(b) || labelFor(a).localeCompare(labelFor(b), "ru"));
+    countsInto("typeCounts", Object.fromEntries(entries), Object.fromEntries(entries.map(([key]) => [key, labelFor(key)])));
+}
+
+function setupResultTabs() {
+    // Temporary UI placeholders. These are not calculated routes or exported results.
+    const placeholderCount = 3;
+    const tabs = [{id: "input", label: "Исходные данные", solutionNumber: null}];
+    for (let number = 1; number <= placeholderCount; number++) {
+        tabs.push({id: `solution-${number}`, label: placeholderCount === 1 ? "Решение" : `Решение ${number}`, solutionNumber: number});
+    }
+    const tablist = document.getElementById("resultTabs");
+    const buttons = [];
+    let selectedIndex = -1;
+    function select(index, focus = false) {
+        const tab = tabs[index];
+        buttons.forEach((button, i) => {
+            button.setAttribute("aria-selected", String(i === index));
+            button.tabIndex = i === index ? 0 : -1;
+        });
+        document.getElementById("workspace").setAttribute("aria-labelledby", `tab-${tab.id}`);
+        document.getElementById("inputSummary").hidden = tab.solutionNumber !== null;
+        const summary = document.getElementById("solutionSummary");
+        summary.hidden = tab.solutionNumber === null;
+        document.getElementById("exportButton").hidden = tab.solutionNumber === null;
+        summary.textContent = tab.solutionNumber === null ? "" : `РЕШЕНИЕ НОМЕР ${tab.solutionNumber}`;
+        document.querySelector(".statistics").scrollTop = 0;
+        if (selectedIndex !== index) resetMapState();
+        selectedIndex = index;
+        if (focus) buttons[index].focus();
+    }
+    tabs.forEach((tab, index) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.id = `tab-${tab.id}`;
+        button.className = "result-tab";
+        button.setAttribute("role", "tab");
+        button.setAttribute("aria-controls", "workspace");
+        button.textContent = tab.label;
+        button.addEventListener("click", () => select(index));
+        button.addEventListener("keydown", event => {
+            let next;
+            if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+            else if (event.key === "ArrowLeft") next = (index + tabs.length - 1) % tabs.length;
+            else if (event.key === "Home") next = 0;
+            else if (event.key === "End") next = tabs.length - 1;
+            else return;
+            event.preventDefault();
+            select(next, true);
+        });
+        buttons.push(button);
+        tablist.append(button);
+    });
+    select(0);
+    tablist.hidden = false;
+    document.getElementById("resultsToolbar").hidden = false;
+}
+
 function popup(properties) {
     const table = document.createElement("table");
     table.className = "popup-table";
@@ -186,9 +261,22 @@ function renderMap(geojson) {
     } else document.getElementById("mapStatus").textContent = "В файле нет объектов для отображения.";
     view.on("change:resolution", updateButtons);
     updateButtons();
+    return () => {
+        view.cancelAnimations();
+        overlay.setPosition(undefined);
+        map.getLayers().forEach(layer => layer.setVisible(true));
+        legendItems.querySelectorAll('input[type="checkbox"]').forEach(check => { check.checked = true; });
+        document.getElementById("legend").scrollTop = 0;
+        fit();
+    };
 }
 
 (async () => {
+    // The old document shows the native leave warning. Only an accepted reload reaches here.
+    if (performance.getEntriesByType("navigation")[0]?.type === "reload") {
+        window.location.replace("/");
+        return;
+    }
     try {
         const data = await datasetStore.load();
         if (!data) { document.getElementById("emptyState").hidden = false; return; }
@@ -201,16 +289,19 @@ function renderMap(geojson) {
         const {file, summary} = data;
         document.getElementById("datasetName").textContent = file.name;
         document.getElementById("totalObjects").textContent = summary.totalObjects.toLocaleString("ru-RU");
-        document.getElementById("fileSize").textContent = `${(summary.fileSizeBytes / 1024).toLocaleString("ru-RU", {maximumFractionDigits: 1})} КиБ`;
-        countsInto("typeCounts", summary.typeCounts, OBJECT_LABELS);
-        countsInto("restrictionCounts", summary.restrictionCounts, RESTRICTION_LABELS);
+        renderInputSummary(summary);
+        setupResultTabs();
         document.getElementById("workspace").hidden = false;
         if (file.size > MAX_PREVIEW_BYTES) {
             document.getElementById("mapStatus").textContent = "Статистика загружена. Отображение файлов больше 100 МиБ пока не поддерживается.";
             document.getElementById("legend").hidden = true;
             return;
         }
-        renderMap(JSON.parse(await file.text()));
+        const geojson = JSON.parse(await file.text());
+        // Fit only after the font and visible page layout have their final dimensions.
+        await document.fonts.ready;
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        resetMapState = renderMap(geojson);
     } catch (error) {
         if (document.getElementById("workspace").hidden) {
             document.getElementById("emptyState").hidden = false;
