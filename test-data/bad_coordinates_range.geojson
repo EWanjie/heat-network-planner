@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[999999,55.75]},"properties":{"id":"src_1","object_type":"source"}},{"type":"Feature","geometry":{"type":"LineString","coordinates":[[999999,55.75],[37.61,55.751]]},"properties":{"id":"net_1","object_type":"heat_network","diameter":300,"flow_tph":50}}]}

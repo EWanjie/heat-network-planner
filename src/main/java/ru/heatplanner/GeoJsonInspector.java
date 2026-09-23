@@ -1,6 +1,9 @@
 package ru.heatplanner;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.core.JsonLocation;
 import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -8,7 +11,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
@@ -19,6 +24,9 @@ import java.util.TreeMap;
  * а данные существующей сети (диаметры, связи) передаёт в {@link ExistingNetworkBuilder}.
  */
 public class GeoJsonInspector {
+
+    /** Сколько ошибок геометрии показывать в сообщении (общее число считается полностью). */
+    private static final int MAX_REPORTED_GEOMETRY_ERRORS = 20;
 
     /** Ошибка структуры или содержимого GeoJSON — не ошибка ввода-вывода. */
     public static class GeoJsonValidationException extends IOException {
@@ -37,6 +45,9 @@ public class GeoJsonInspector {
         public Map<String, Long> restrictionCounts;
         /** Сводка по существующей сети (см. ExistingNetworkBuilder). */
         public ExistingNetworkBuilder.NetworkSummary network;
+        /** Связи существующей сети для расчётного ядра; в JSON-ответ не попадают. */
+        @JsonIgnore
+        public Map<String, String> upstreamLinks;
     }
 
     /** Запуск из командной строки или IDE: путь к файлу — единственный аргумент. Нужен для ручных проверок. */
@@ -67,6 +78,9 @@ public class GeoJsonInspector {
         Set<String> seenIds = new HashSet<>();
         // Получает объекты существующей сети по ходу чтения; результат забираем в конце.
         ExistingNetworkBuilder networkBuilder = new ExistingNetworkBuilder();
+        // Ошибки геометрии копим по всему файлу, чтобы показать их разом, а не по одной за загрузку.
+        List<String> geometryErrors = new ArrayList<>();
+        long geometryErrorCount = 0;
         long total = 0;
         boolean featuresFound = false;
         String rootType = null;
@@ -118,8 +132,21 @@ public class GeoJsonInspector {
                                     "Нет restriction_type у Feature #" + (total + 1));
                             restrictions.merge(restriction.asText(), 1L, Long::sum);
                         }
-                        // source, heat_network и heat_chamber уходят в построение графа сети, остальные типы билдер игнорирует.
-                        networkBuilder.add(feature, type.asText(), id, total + 1);
+                        // Геометрия: форма и диапазон координат, замкнутость колец, тип, подходящий типу объекта.
+                        String geometryProblem = GeometryChecker.check(geometry);
+                        if (geometryProblem == null) {
+                            geometryProblem = GeometryChecker.checkKind(type.asText(), geometry.path("type").asText());
+                        }
+                        if (geometryProblem != null) {
+                            geometryErrorCount++;
+                            if (geometryErrors.size() < MAX_REPORTED_GEOMETRY_ERRORS) {
+                                geometryErrors.add(type.asText() + " \"" + id + "\" (Feature #" + (total + 1) + "): "
+                                        + geometryProblem + ".");
+                            }
+                        } else {
+                            // source, heat_network и heat_chamber уходят в построение графа сети, остальные типы билдер игнорирует.
+                            networkBuilder.add(feature, type.asText(), id, total + 1);
+                        }
                         total++;
                     }
                 } else {
@@ -129,6 +156,20 @@ public class GeoJsonInspector {
             require("FeatureCollection".equals(rootType), "Корневой type должен быть FeatureCollection.");
             require(featuresFound, "В файле отсутствует массив features.");
             require(parser.nextToken() == null, "После корневого объекта найдены лишние данные.");
+        } catch (JsonProcessingException e) {
+            // Синтаксически неверный JSON (обрыв файла, лишняя запятая, повторяющийся ключ, не тот символ).
+            // Раньше это исключение не ловилось, и пользователь получал ошибку сервера 500 вместо объяснения.
+            throw new GeoJsonValidationException("Файл не является корректным JSON" + describeLocation(e.getLocation())
+                    + ". Подробности: " + e.getOriginalMessage() + ".");
+        }
+
+        if (geometryErrorCount > 0) {
+            StringBuilder text = new StringBuilder("Ошибки геометрии (" + geometryErrorCount + "):");
+            geometryErrors.forEach(problem -> text.append("\n- ").append(problem));
+            if (geometryErrorCount > geometryErrors.size()) {
+                text.append("\n... и ещё ").append(geometryErrorCount - geometryErrors.size());
+            }
+            throw new GeoJsonValidationException(text.toString());
         }
 
         InspectionResult result = new InspectionResult();
@@ -138,7 +179,16 @@ public class GeoJsonInspector {
         result.restrictionCounts = restrictions;
         // Файл прочитан целиком — теперь можно проверить связи сети (ссылки, циклы, доступность источника).
         result.network = networkBuilder.build();
+        result.upstreamLinks = networkBuilder.upstreamLinks();
         return result;
+    }
+
+    /** « (строка N, столбец M)» для сообщения об ошибке JSON; пустая строка, если положение неизвестно. */
+    private static String describeLocation(JsonLocation location) {
+        if (location == null || location.getLineNr() < 1) {
+            return "";
+        }
+        return " (строка " + location.getLineNr() + ", столбец " + location.getColumnNr() + ")";
     }
 
     /** Печать сводки в консоль — только для запуска через main. */

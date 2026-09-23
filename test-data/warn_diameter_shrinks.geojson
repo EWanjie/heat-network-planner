@@ -1,0 +1,5 @@
+{"type":"FeatureCollection","features":[
+{"type":"Feature","geometry":{"type":"Point","coordinates":[37.6000,55.7500]},"properties":{"id":"src_1","object_type":"source"}},
+{"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.6000,55.7500],[37.6020,55.7510]]},"properties":{"id":"net_1","object_type":"heat_network","diameter":200,"flow_tph":100.0,"upstream_object_id":"src_1"}},
+{"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.6020,55.7510],[37.6040,55.7520]]},"properties":{"id":"net_2","object_type":"heat_network","diameter":300,"flow_tph":80.0,"upstream_object_id":"net_1"}}
+]}

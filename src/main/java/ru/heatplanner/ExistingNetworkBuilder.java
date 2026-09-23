@@ -248,7 +248,53 @@ public class ExistingNetworkBuilder {
                         + " участков, в ТЗ допускается не более " + MAX_CHAMBER_SEGMENTS + ".");
             }
         });
+
+        // По ТЗ (базовая модель) условный диаметр существующей сети не уменьшается по направлению к источнику.
+        // Если в данных это не так, расчёт реконструкции будет опираться на противоречивые диаметры — предупреждаем.
+        List<String> shrinking = new ArrayList<>();
+        int shrinkingCount = 0;
+        for (Node node : nodes.values()) {
+            if (!HEAT_NETWORK.equals(node.type) || node.diameter == null) {
+                continue;
+            }
+            Node up = nearestUpstreamSegment(node);
+            if (up != null && up.diameter != null && up.diameter < node.diameter) {
+                shrinkingCount++;
+                if (shrinking.size() < MAX_REPORTED_IDS) {
+                    shrinking.add(node.id + " (" + node.diameter + " мм) → " + up.id + " (" + up.diameter + " мм)");
+                }
+            }
+        }
+        if (shrinkingCount > 0) {
+            summary.warnings.add("Диаметр уменьшается по направлению к источнику на участках: " + shrinkingCount
+                    + " (в ТЗ он не должен уменьшаться), например: " + String.join("; ", shrinking) + ".");
+        }
         return summary;
+    }
+
+    /**
+     * Связи «объект → следующий по направлению к источнику» после build(): и заданные атрибутами,
+     * и восстановленные по геометрии. Источники входят со значением null; исключённые из графа объекты отсутствуют.
+     * Нужны расчётному ядру (Planner), чтобы не разбирать связи второй раз.
+     */
+    public Map<String, String> upstreamLinks() {
+        Map<String, String> links = new LinkedHashMap<>();
+        for (Node node : nodes.values()) {
+            links.put(node.id, node.upstreamId);
+        }
+        return links;
+    }
+
+    /** Ближайший к источнику участок (heat_network) выше по цепочке; камеры пропускаются. Нет такого — null. */
+    private Node nearestUpstreamSegment(Node node) {
+        Node cur = node.upstreamId == null ? null : nodes.get(node.upstreamId);
+        while (cur != null && !HEAT_NETWORK.equals(cur.type)) {
+            if (SOURCE.equals(cur.type)) {
+                return null;
+            }
+            cur = cur.upstreamId == null ? null : nodes.get(cur.upstreamId);
+        }
+        return cur;
     }
 
     /** Режим атрибутов: как в ТЗ, обязательны diameter, upstream_object_id и flow_tph участков. */

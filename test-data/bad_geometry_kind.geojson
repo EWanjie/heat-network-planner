@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[37.6000,55.7500]},"properties":{"id":"src_1","object_type":"source"}},{"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.605,55.753],[37.606,55.754]]},"properties":{"id":"cp_1","object_type":"oks_connection_point","oks_id":"oks_f1"}}]}
