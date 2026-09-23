@@ -100,8 +100,9 @@ final class Tree {
         return n;
     }
 
-    Node addTerminal(PlanModel.Target target, PlanModel.ConnectionPoint point) {
-        Node n = addNode(Kind.TERMINAL, point.xy);
+    /** Конец трубы у ОКС: xy — где труба реально заканчивается (у стены здания), а не сама точка подключения. */
+    Node addTerminal(PlanModel.Target target, PlanModel.ConnectionPoint point, double[] xy) {
+        Node n = addNode(Kind.TERMINAL, xy);
         n.target = target;
         n.point = point;
         return n;

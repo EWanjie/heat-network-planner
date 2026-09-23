@@ -359,7 +359,7 @@ final class Planner {
                         }
                     }
                     anyPath = true;
-                    Tree t2 = attach(tree, c, pts, target, cp);
+                    Tree t2 = attach(tree, c, pts, target, cp, ex);
                     if (t2 == null) {
                         continue;
                     }
@@ -555,9 +555,9 @@ final class Planner {
 
         /** Добавляет ОКС в копию дерева по кандидату; null, если присоединение невозможно. */
         Tree attach(Tree tree, Cand c, double[][] pathFromTarget, PlanModel.Target target,
-                    PlanModel.ConnectionPoint cp) {
+                    PlanModel.ConnectionPoint cp, Exempt ex) {
             Tree t = tree.copy();
-            double[][] pts = Geo.reverse(pathFromTarget);
+            double[][] pts = trimAtOwn(Geo.reverse(pathFromTarget), ex.own);
             Tree.Node from;
             switch (c.kind) {
                 case Cand.SEGMENT:
@@ -582,8 +582,46 @@ final class Planner {
             if (from == null || !from.canTakeBranch()) {
                 return null;
             }
-            t.connect(from, t.addTerminal(target, cp), pts, model);
+            t.connect(from, t.addTerminal(target, cp, pts[pts.length - 1]), pts, model);
             return t;
+        }
+
+        /**
+         * Труба не прокладывается под зданием: путь (от врезки к ОКС) обрезается там, где он впервые касается контура
+         * здания самого ОКС. Терминал оказывается у стены. Если путь начинается уже внутри контура, он не меняется.
+         */
+        double[][] trimAtOwn(double[][] pts, List<PlanModel.Shape> own) {
+            if (own.isEmpty()) {
+                return pts;
+            }
+            for (PlanModel.Shape s : own) {
+                if (Geo.inside(pts[0][0], pts[0][1], s.rings)) {
+                    return pts;
+                }
+            }
+            for (int i = 1; i < pts.length; i++) {
+                double best = 2;
+                for (PlanModel.Shape s : own) {
+                    for (double[][] ring : s.rings) {
+                        for (int j = 1; j < ring.length; j++) {
+                            double[] hit = Geo.intersect(pts[i - 1], pts[i], ring[j - 1], ring[j]);
+                            if (hit != null && hit[0] < best) {
+                                best = hit[0];
+                            }
+                        }
+                    }
+                }
+                if (best <= 1) {
+                    double[] cut = {pts[i - 1][0] + best * (pts[i][0] - pts[i - 1][0]),
+                            pts[i - 1][1] + best * (pts[i][1] - pts[i - 1][1])};
+                    double[][] out = new double[i + 1][];
+                    System.arraycopy(pts, 0, out, 0, i);
+                    out[i] = cut;
+                    // Совсем короткий остаток (труба упирается в стену сразу) оставляем как есть, чтобы не получить пустую трубу.
+                    return Geo.length(out) < 0.05 ? pts : out;
+                }
+            }
+            return pts;
         }
 
         /** Точная проверка пути: зазоры до запретных зон и отсутствие пересечений с уже проложенными новыми трубами. */

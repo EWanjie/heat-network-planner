@@ -23,6 +23,9 @@ final class Router {
     private final byte[] block;
     /** Ячейки, занятые уже проложенными новыми трубами: их нельзя пересекать, к ним можно только присоединиться. */
     private final byte[] occ;
+    /** Собственная копия множителей стоимости: внутри здания самого ОКС путь временно почти бесплатный (труба там всё равно не прокладывается). */
+    private final float[] mult;
+    private final List<Integer> multChanged = new ArrayList<>();
     private final float[] dist;
     private final int[] prev;
     private long[] heap = new long[1 << 16];
@@ -33,6 +36,7 @@ final class Router {
     Router(RasterMap map) {
         this.map = map;
         this.block = map.block.clone();
+        this.mult = map.mult.clone();
         this.occ = new byte[map.block.length];
         this.dist = new float[map.block.length];
         this.prev = new int[map.block.length];
@@ -118,6 +122,11 @@ final class Router {
                 }
                 unblocked.add(new int[]{j, block[j]});
                 block[j] = RasterMap.FREE;
+                if (Geo.inside(x, y, own.rings)) {
+                    // Внутри здания трубы не будет: путь дойдёт до стены, дальше он обрезается (см. Planner.trimAtOwn).
+                    multChanged.add(j);
+                    mult[j] = 0.01f;
+                }
             }
         }
     }
@@ -144,6 +153,10 @@ final class Router {
             block[u[0]] = (byte) u[1];
         }
         unblocked.clear();
+        for (int j : multChanged) {
+            mult[j] = map.mult[j];
+        }
+        multChanged.clear();
     }
 
     /** Дейкстра из стартовой ячейки. Занятые ячейки получают расстояние, но дальше по ним путь не идёт. */
@@ -184,7 +197,7 @@ final class Router {
                         continue;
                     }
                 }
-                float nd = d + (float) ((diagonal ? cell * SQRT2 : cell) * (map.mult[i] + map.mult[j]) * 0.5);
+                float nd = d + (float) ((diagonal ? cell * SQRT2 : cell) * (mult[i] + mult[j]) * 0.5);
                 if (nd < dist[j]) {
                     dist[j] = nd;
                     prev[j] = i;
@@ -258,7 +271,7 @@ final class Router {
         if (ia < 0 || ib < 0) {
             return 1;
         }
-        return (map.mult[ia] + map.mult[ib]) * 0.5;
+        return (mult[ia] + mult[ib]) * 0.5;
     }
 
     /**
@@ -283,7 +296,7 @@ final class Router {
                 return -1;
             }
             if (k > 0) {
-                cost += seg * map.mult[idx];
+                cost += seg * mult[idx];
             }
         }
         return cost;
