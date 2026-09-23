@@ -109,6 +109,8 @@ public class GeoJsonInspector {
                         JsonNode geometry = feature.path("geometry");
                         require(geometry.isObject(), "Нет geometry у Feature #" + (total + 1));
 
+                        GeoJsonGeometryValidator.validate(geometry, "Feature #" + (total + 1));
+
                         JsonNode properties = feature.path("properties");
                         require(properties.isObject(), "Нет properties у Feature #" + (total + 1));
 
@@ -132,11 +134,8 @@ public class GeoJsonInspector {
                                     "Нет restriction_type у Feature #" + (total + 1));
                             restrictions.merge(restriction.asText(), 1L, Long::sum);
                         }
-                        // Геометрия: форма и диапазон координат, замкнутость колец, тип, подходящий типу объекта.
-                        String geometryProblem = GeometryChecker.check(geometry);
-                        if (geometryProblem == null) {
-                            geometryProblem = GeometryChecker.checkKind(type.asText(), geometry.path("type").asText());
-                        }
+                        // Форма и диапазон координат уже проверены GeoJsonGeometryValidator; здесь — соответствие типа геометрии типу объекта.
+                        String geometryProblem = GeometryChecker.checkKind(type.asText(), geometry.path("type").asText());
                         if (geometryProblem != null) {
                             geometryErrorCount++;
                             if (geometryErrors.size() < MAX_REPORTED_GEOMETRY_ERRORS) {

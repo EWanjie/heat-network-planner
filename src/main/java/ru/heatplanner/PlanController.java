@@ -5,12 +5,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 /** Расчёт вариантов подключения: тот же файл, что и при загрузке, но с полным расчётом. */
 @RestController
@@ -22,7 +24,12 @@ public class PlanController {
      * 422 — файл корректен, но расчёт невозможен (нет источника, сети или ОКС).
      */
     @PostMapping("/api/plan")
-    public ResponseEntity<?> plan(@RequestParam("file") MultipartFile file) throws IOException {
+    public ResponseEntity<?> plan(@RequestParam MultiValueMap<String, MultipartFile> uploads) throws IOException {
+        // Тот же контракт загрузки, что у /api/upload: ровно один файл в поле "file".
+        MultipartFile file = uploads.getFirst("file");
+        if (uploads.values().stream().mapToLong(List::size).sum() != 1 || file == null) {
+            return ResponseEntity.badRequest().body("Выберите ровно один файл.");
+        }
         if (file.isEmpty()) {
             return ResponseEntity.badRequest().body("Файл пуст.");
         }

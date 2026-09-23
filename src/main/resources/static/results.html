@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Моделирование трасс подключения к тепловым сетям</title>
+    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260923-solutions">
+    <link rel="stylesheet" href="/app.css?v=20260923-solutions">
+    <link rel="stylesheet" href="/solutions.css?v=20260923-solutions">
+    <script src="/lib/openlayers/ol.js?v=20260923-solutions" defer></script>
+    <script src="/dataset-store.js?v=20260923-solutions" defer></script>
+    <script src="/schematic-basemap.js?v=20260923-solutions" defer></script>
+    <script src="/solutions.js?v=20260923-solutions" defer></script>
+    <script src="/results.js?v=20260923-solutions" defer></script>
+</head>
+<body class="results-page">
+<header class="topbar">
+    <h1 id="datasetName" class="dataset-name">Файл не загружен</h1>
+    <a class="button" href="/">Загрузить файл</a>
+</header>
+<div id="emptyState" class="empty-state" hidden>
+    <h2>Данные не загружены</h2><p id="emptyMessage">Сначала выберите GeoJSON на странице загрузки.</p><a class="button primary" href="/">Выбрать файл</a>
+</div>
+<div id="resultsToolbar" class="results-toolbar" hidden>
+    <nav id="resultTabs" class="result-tabs" role="tablist" aria-label="Исходные данные и решения" hidden></nav>
+    <div class="export-slot">
+        <button id="exportButton" type="button" disabled hidden title="Выгрузка станет доступна после расчёта решений">Выгрузить данные</button>
+    </div>
+</div>
+<main id="workspace" class="workspace" role="tabpanel" aria-labelledby="tab-input" hidden>
+    <aside class="statistics" aria-label="Справка" tabindex="0">
+        <div id="inputSummary">
+            <h2>Всего объектов</h2><p id="totalObjects" class="total"></p>
+            <h2 class="composition-heading">Состав данных</h2><ul id="typeCounts" class="counts"></ul>
+        </div>
+        <div id="solutionSummary" aria-live="polite" hidden></div>
+    </aside>
+    <section class="map-section" aria-label="Карта объектов">
+        <div class="map-frame">
+            <div id="map" tabindex="0" aria-label="Карта объектов GeoJSON"></div>
+            <aside id="legend" class="legend" aria-label="Легенда и слои"><div id="legendItems"></div></aside>
+        </div>
+        <div class="map-messages">
+        <p id="tileStatus" class="status" role="status" aria-live="polite"></p>
+        <p id="mapStatus" class="status" role="status" aria-live="polite"></p>
+        </div>
+    </section>
+</main>
+</body>
+</html>
