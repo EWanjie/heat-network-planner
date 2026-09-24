@@ -1,6 +1,5 @@
 package ru.heatplanner;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.core.JsonLocation;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -45,9 +44,6 @@ public class GeoJsonInspector {
         public Map<String, Long> restrictionCounts;
         /** Сводка по существующей сети (см. ExistingNetworkBuilder). */
         public ExistingNetworkBuilder.NetworkSummary network;
-        /** Связи существующей сети для расчётного ядра; в JSON-ответ не попадают. */
-        @JsonIgnore
-        public Map<String, String> upstreamLinks;
     }
 
     /** Запуск из командной строки или IDE: путь к файлу — единственный аргумент. Нужен для ручных проверок. */
@@ -178,7 +174,6 @@ public class GeoJsonInspector {
         result.restrictionCounts = restrictions;
         // Файл прочитан целиком — теперь можно проверить связи сети (ссылки, циклы, доступность источника).
         result.network = networkBuilder.build();
-        result.upstreamLinks = networkBuilder.upstreamLinks();
         return result;
     }
 

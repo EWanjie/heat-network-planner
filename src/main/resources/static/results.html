@@ -4,14 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Моделирование трасс подключения к тепловым сетям</title>
-    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260923-solutions">
-    <link rel="stylesheet" href="/app.css?v=20260923-solutions">
-    <link rel="stylesheet" href="/solutions.css?v=20260923-solutions">
-    <script src="/lib/openlayers/ol.js?v=20260923-solutions" defer></script>
-    <script src="/dataset-store.js?v=20260923-solutions" defer></script>
-    <script src="/schematic-basemap.js?v=20260923-solutions" defer></script>
-    <script src="/solutions.js?v=20260923-solutions" defer></script>
-    <script src="/results.js?v=20260923-solutions" defer></script>
+    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260922-export-placeholder5">
+    <link rel="stylesheet" href="/app.css?v=20260922-export-placeholder5">
+    <script src="/lib/openlayers/ol.js?v=20260922-export-placeholder5" defer></script>
+    <script src="/dataset-store.js?v=20260922-export-placeholder5" defer></script>
+    <script src="/schematic-basemap.js?v=20260922-export-placeholder5" defer></script>
+    <script src="/results.js?v=20260922-export-placeholder5" defer></script>
 </head>
 <body class="results-page">
 <header class="topbar">
@@ -24,7 +22,7 @@
 <div id="resultsToolbar" class="results-toolbar" hidden>
     <nav id="resultTabs" class="result-tabs" role="tablist" aria-label="Исходные данные и решения" hidden></nav>
     <div class="export-slot">
-        <button id="exportButton" type="button" disabled hidden title="Выгрузка станет доступна после расчёта решений">Выгрузить данные</button>
+        <button id="exportButton" type="button" disabled hidden title="Выгрузка станет доступна после реализации расчёта">Выгрузить данные</button>
     </div>
 </div>
 <main id="workspace" class="workspace" role="tabpanel" aria-labelledby="tab-input" hidden>
@@ -33,7 +31,7 @@
             <h2>Всего объектов</h2><p id="totalObjects" class="total"></p>
             <h2 class="composition-heading">Состав данных</h2><ul id="typeCounts" class="counts"></ul>
         </div>
-        <div id="solutionSummary" aria-live="polite" hidden></div>
+        <p id="solutionSummary" class="solution-placeholder" aria-live="polite" hidden></p>
     </aside>
     <section class="map-section" aria-label="Карта объектов">
         <div class="map-frame">

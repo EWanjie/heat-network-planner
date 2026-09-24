@@ -64,39 +64,31 @@ function renderInputSummary(summary) {
     countsInto("typeCounts", Object.fromEntries(entries), Object.fromEntries(entries.map(([key]) => [key, labelFor(key)])));
 }
 
-// Вкладки: «Исходные данные» и по одной на каждое рассчитанное решение. Пока идёт расчёт, показывается неактивная
-// вкладка-индикатор. Вызывается повторно, когда расчёт закончился: вкладки пересобираются.
-function setupResultTabs(variants = [], state = "ready") {
-    const tabs = [{id: "input", label: "Исходные данные", variant: null}];
-    if (state === "computing") tabs.push({id: "pending", label: "Расчёт решений…", disabled: true});
-    for (const variant of variants) {
-        tabs.push({id: `solution-${variant.rank}`, label: variants.length === 1 ? "Решение" : `Решение ${variant.rank}`,
-            variant, title: variant.name});
+function setupResultTabs() {
+    // Temporary UI placeholders. These are not calculated routes or exported results.
+    const placeholderCount = 3;
+    const tabs = [{id: "input", label: "Исходные данные", solutionNumber: null}];
+    for (let number = 1; number <= placeholderCount; number++) {
+        tabs.push({id: `solution-${number}`, label: placeholderCount === 1 ? "Решение" : `Решение ${number}`, solutionNumber: number});
     }
     const tablist = document.getElementById("resultTabs");
-    tablist.replaceChildren();
     const buttons = [];
     let selectedIndex = -1;
     function select(index, focus = false) {
         const tab = tabs[index];
-        if (tab.disabled) return;
-        const isSolution = tab.variant !== null && tab.variant !== undefined;
         buttons.forEach((button, i) => {
             button.setAttribute("aria-selected", String(i === index));
             button.tabIndex = i === index ? 0 : -1;
         });
-        const workspace = document.getElementById("workspace");
-        workspace.setAttribute("aria-labelledby", `tab-${tab.id}`);
-        workspace.classList.toggle("solution-mode", isSolution);
-        document.getElementById("inputSummary").hidden = isSolution;
+        document.getElementById("workspace").setAttribute("aria-labelledby", `tab-${tab.id}`);
+        document.getElementById("inputSummary").hidden = tab.solutionNumber !== null;
         const summary = document.getElementById("solutionSummary");
-        summary.hidden = !isSolution;
-        document.getElementById("exportButton").hidden = !isSolution;
+        summary.hidden = tab.solutionNumber === null;
+        document.getElementById("exportButton").hidden = tab.solutionNumber === null;
+        summary.textContent = tab.solutionNumber === null ? "" : `РЕШЕНИЕ НОМЕР ${tab.solutionNumber}`;
         document.querySelector(".statistics").scrollTop = 0;
-        window.resultsMap?.updateSize();
         if (selectedIndex !== index) resetMapState();
         selectedIndex = index;
-        if (isSolution) window.solutions.show(tab.variant, summary); else window.solutions.hide();
         if (focus) buttons[index].focus();
     }
     tabs.forEach((tab, index) => {
@@ -107,17 +99,13 @@ function setupResultTabs(variants = [], state = "ready") {
         button.setAttribute("role", "tab");
         button.setAttribute("aria-controls", "workspace");
         button.textContent = tab.label;
-        if (tab.title) button.title = tab.title;
-        if (tab.disabled) button.disabled = true;
         button.addEventListener("click", () => select(index));
         button.addEventListener("keydown", event => {
-            const enabled = tabs.map((item, i) => i).filter(i => !tabs[i].disabled);
-            const at = enabled.indexOf(index);
             let next;
-            if (event.key === "ArrowRight") next = enabled[(at + 1) % enabled.length];
-            else if (event.key === "ArrowLeft") next = enabled[(at + enabled.length - 1) % enabled.length];
-            else if (event.key === "Home") next = enabled[0];
-            else if (event.key === "End") next = enabled[enabled.length - 1];
+            if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+            else if (event.key === "ArrowLeft") next = (index + tabs.length - 1) % tabs.length;
+            else if (event.key === "Home") next = 0;
+            else if (event.key === "End") next = tabs.length - 1;
             else return;
             event.preventDefault();
             select(next, true);
@@ -125,37 +113,11 @@ function setupResultTabs(variants = [], state = "ready") {
         buttons.push(button);
         tablist.append(button);
     });
-    // После расчёта сразу открываем лучшее решение; пока идёт расчёт остаёмся на исходных данных.
-    select(state === "ready" && variants.length ? 1 : 0);
+    select(0);
     tablist.hidden = false;
     document.getElementById("resultsToolbar").hidden = false;
 }
 
-// Запускает расчёт решений для загруженного файла и обновляет вкладки, кнопку выгрузки и сообщения.
-async function calculateSolutions(file) {
-    const status = document.getElementById("mapStatus");
-    const button = document.getElementById("exportButton");
-    const started = Date.now();
-    const timer = setInterval(() => {
-        status.textContent = `Считаем решения подключения… ${Math.round((Date.now() - started) / 1000)} с`;
-    }, 1000);
-    status.textContent = "Считаем решения подключения…";
-    setupResultTabs([], "computing");
-    try {
-        const variants = await window.solutions.start(file);
-        status.textContent = "";
-        button.disabled = false;
-        button.title = "Скачать GeoJSON со всеми решениями";
-        button.onclick = () => window.solutions.download();
-        setupResultTabs(variants, "ready");
-    } catch (error) {
-        status.textContent = "Расчёт не выполнен: " + error.message;
-        status.classList.add("error");
-        setupResultTabs([], "ready");
-    } finally {
-        clearInterval(timer);
-    }
-}
 function popup(properties) {
     const table = document.createElement("table");
     table.className = "popup-table";
@@ -299,8 +261,6 @@ function renderMap(geojson) {
     } else document.getElementById("mapStatus").textContent = "В файле нет объектов для отображения.";
     view.on("change:resolution", updateButtons);
     updateButtons();
-    window.resultsMap = map;
-    window.solutions.attach(map, geojson);
     return () => {
         view.cancelAnimations();
         overlay.setPosition(undefined);
@@ -342,8 +302,6 @@ function renderMap(geojson) {
         await document.fonts.ready;
         await new Promise(resolve => requestAnimationFrame(resolve));
         resetMapState = renderMap(geojson);
-        // Расчёт решений запускается сам: ручных действий не нужно (сценарий демонстрации, п. 2).
-        calculateSolutions(file);
     } catch (error) {
         if (document.getElementById("workspace").hidden) {
             document.getElementById("emptyState").hidden = false;

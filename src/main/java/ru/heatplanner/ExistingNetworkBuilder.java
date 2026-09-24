@@ -272,19 +272,6 @@ public class ExistingNetworkBuilder {
         return summary;
     }
 
-    /**
-     * Связи «объект → следующий по направлению к источнику» после build(): и заданные атрибутами,
-     * и восстановленные по геометрии. Источники входят со значением null; исключённые из графа объекты отсутствуют.
-     * Нужны расчётному ядру (Planner), чтобы не разбирать связи второй раз.
-     */
-    public Map<String, String> upstreamLinks() {
-        Map<String, String> links = new LinkedHashMap<>();
-        for (Node node : nodes.values()) {
-            links.put(node.id, node.upstreamId);
-        }
-        return links;
-    }
-
     /** Ближайший к источнику участок (heat_network) выше по цепочке; камеры пропускаются. Нет такого — null. */
     private Node nearestUpstreamSegment(Node node) {
         Node cur = node.upstreamId == null ? null : nodes.get(node.upstreamId);
