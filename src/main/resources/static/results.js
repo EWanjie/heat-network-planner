@@ -22,6 +22,8 @@ const BUILDINGS = new Set(["oks_existing", "oks_future", "restriction:oks"]);
 const TOP = new Set(["source", "heat_chamber", "oks_connection_point"]);
 const MAX_PREVIEW_BYTES = 100 * 1024 * 1024;
 let resetMapState = () => {};
+let currentResultTab = "input";
+let syncRoadDemo = () => {};
 
 function labelFor(key) {
     return key.startsWith("restriction:") ? (RESTRICTION_LABELS[key.slice(12)] || key.slice(12)) : (OBJECT_LABELS[key] || key);
@@ -76,6 +78,7 @@ function setupResultTabs() {
     let selectedIndex = -1;
     function select(index, focus = false) {
         const tab = tabs[index];
+        currentResultTab = tab.id;
         buttons.forEach((button, i) => {
             button.setAttribute("aria-selected", String(i === index));
             button.tabIndex = i === index ? 0 : -1;
@@ -88,6 +91,7 @@ function setupResultTabs() {
         summary.textContent = tab.solutionNumber === null ? "" : `РЕШЕНИЕ НОМЕР ${tab.solutionNumber}`;
         document.querySelector(".statistics").scrollTop = 0;
         if (selectedIndex !== index) resetMapState();
+        syncRoadDemo();
         selectedIndex = index;
         if (focus) buttons[index].focus();
     }
@@ -129,7 +133,7 @@ function popup(properties) {
     return table;
 }
 
-function renderMap(geojson) {
+function renderMap(geojson, workingDataset) {
     const view = new ol.View({center: [0, 0], zoom: 2, minZoom: 0, maxZoom: 19,
         enableRotation: false, smoothResolutionConstraint: false});
     const tileStatus = document.getElementById("tileStatus");
@@ -210,6 +214,7 @@ function renderMap(geojson) {
         map.addLayer(layer);
         legendRow(key, labelFor(key), color, layer);
     }
+    syncRoadDemo = mountRoadDemo(map, workingDataset, legendItems, () => currentResultTab === "input");
     legendRow("map", "Карта", "#737373", base);
     const popupElement = document.createElement("div");
     popupElement.className = "map-popup";
@@ -301,7 +306,8 @@ function renderMap(geojson) {
         // Fit only after the font and visible page layout have their final dimensions.
         await document.fonts.ready;
         await new Promise(resolve => requestAnimationFrame(resolve));
-        resetMapState = renderMap(geojson);
+        window.workingDataset = roadEnrichment.create(geojson);
+        resetMapState = renderMap(geojson, window.workingDataset);
     } catch (error) {
         if (document.getElementById("workspace").hidden) {
             document.getElementById("emptyState").hidden = false;
