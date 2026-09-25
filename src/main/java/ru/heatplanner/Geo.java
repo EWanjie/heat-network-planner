@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** Плоская геометрия в метрах (EPSG:32637): расстояния, пересечения, работа с ломаными. Полилиния — double[][] {x, y}. */
-final class Geo {
+public final class Geo {
 
     private Geo() {
     }

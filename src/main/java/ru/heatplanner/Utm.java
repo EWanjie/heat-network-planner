@@ -7,7 +7,7 @@ package ru.heatplanner;
  * Формулы Крюгера (ряды по третьему порядку): точность на масштабе города — доли миллиметра.
  * Внешних библиотек не нужно.
  */
-final class Utm {
+public final class Utm {
 
     private static final double A = 6378137.0;
     private static final double F = 1 / 298.257223563;
@@ -40,7 +40,7 @@ final class Utm {
     }
 
     /** Градусы (долгота, широта) → метры {x (восток), y (север)}. */
-    static double[] forward(double lonDeg, double latDeg) {
+    public static double[] forward(double lonDeg, double latDeg) {
         double phi = Math.toRadians(latDeg);
         double dl = Math.toRadians(lonDeg) - LON0;
         double t = Math.sinh(atanh(Math.sin(phi)) - E * atanh(E * Math.sin(phi)));
@@ -56,7 +56,7 @@ final class Utm {
     }
 
     /** Метры {x, y} → градусы {долгота, широта}. */
-    static double[] inverse(double x, double y) {
+    public static double[] inverse(double x, double y) {
         double xi = y / (K0 * AA);
         double eta = (x - E0) / (K0 * AA);
         double xiP = xi;
