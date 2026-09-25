@@ -214,3 +214,7 @@ p { line-height: 1.6; }
     .export-slot { flex-basis: 156px; }
     #exportButton { padding: 10px 12px; font-size: 13px; }
 }
+
+.road-import-info { margin-top: 24px; padding-top: 16px; border-top: 1px solid #39333f; }
+.road-import-info p { font-size: 12px; margin-bottom: 10px; }
+.road-import-info button { font-size: 12px; padding: 8px 10px; }

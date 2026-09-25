@@ -1,0 +1,15 @@
+const assert=require('assert/strict');const m=require('../../main/resources/static/road-enrichment.js');
+const original={type:'FeatureCollection',features:[{type:'Feature',properties:{id:'external:osm:way:1'},geometry:{type:'GeometryCollection',geometries:[{type:'Point',coordinates:[0,0]},{type:'Polygon',coordinates:[[[2,2],[2,0],[0,0],[2,2]]]}]}}]};
+assert.deepEqual(m.bounds(original),[0,0,2,2]);assert.equal(m.bounds({features:[{geometry:null}]}),null);
+assert.deepEqual(m.clipLine([[-1,1],[3,1]],[0,0,2,2]),[[[0,1],[2,1]]]);
+assert.deepEqual(m.clipLine([[-1,3],[3,3]],[0,0,2,2]),[]);
+assert.equal(m.clipLine([[1,1],[3,1],[3,3],[1,1]],[0,0,2,2]).length,2);
+const way=(id,highway,geometry)=>({type:'way',id,tags:{highway,width:'7.5 m'},geometry:geometry.map(([lon,lat])=>({lon,lat}))});
+const response={elements:[way(1,'residential',[[-1,1],[3,1]]),way(1,'residential',[[-1,1],[3,1]]),way(2,'footway',[[0,0],[1,1]]),way(3,'service',[[1,0],[1,2]])]};
+const before=JSON.stringify(original);const f=m.convert(response,[0,0,2,2],original);
+assert.equal(f.length,2);assert.equal(f[0].properties.id,'external:osm:way:1:import');assert.equal(f[0].properties.width_m,7.5);assert.equal(f[0].properties.geometry_role,'centerline');assert.equal(JSON.stringify(original),before);
+assert.equal(m.parseWidth('2 lanes'),null);assert.equal(m.parseWidth('0'),null);assert.equal(m.parseWidth('6'),6);
+assert.throws(()=>m.convert({remark:'timeout',elements:[]},[0,0,2,2],original));
+(async()=>{const input={type:'FeatureCollection',features:[{geometry:{type:'LineString',coordinates:[[37.63,55.69],[37.64,55.70]]},properties:{id:1}}]};const s=m.create(input);let calls=0;
+global.fetch=async()=>{calls++;if(calls===1)throw Error('offline');return {ok:true,json:async()=>({elements:[way(3,'service',[[37.631,55.691],[37.635,55.695]])]})}};
+await s.load();assert.equal(s.snapshot().status,'error');assert.throws(()=>s.getWorkingDataset());await s.load();assert.equal(s.snapshot().status,'ready');assert.equal(s.getWorkingDataset().features.length,2);await s.load();assert.equal(calls,2);assert.equal(input.features.length,1);console.log('PASS bbox, clipping, disjoint parts, filtering, IDs, width, partial-response rejection, failure/retry, memory merge');})().catch(e=>{console.error(e);process.exitCode=1});
