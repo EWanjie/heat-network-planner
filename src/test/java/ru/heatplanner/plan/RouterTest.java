@@ -265,7 +265,11 @@ class RouterTest {
         ObstacleSet set = new ObstacleSet(List.of(own, south), RuleSet.strict());
         PlanInput.Target t = new PlanInput.Target(Id.text("cp"), c(10, 4), 20);
         // Строго по приложению: только ближайшая (южная) граница; она упирается в чужое здание.
-        assertTrue(Start.forTarget(t, set, DN, RuleSet.strict()).isEmpty());
+        List<Start.Refusal> why = new java.util.ArrayList<>();
+        assertTrue(Start.forTarget(t, set, DN, RuleSet.strict(), why).isEmpty());
+        assertEquals(1, why.size());
+        assertEquals(Start.Refusal.Code.EXIT_IN_OTHER_ZONE, why.get(0).code);
+        assertTrue(south == why.get(0).blocker);
         // Запасной режим: ближайшая из остальных допустимых границ, и это отмечено.
         List<Start> fallback = Start.forTarget(t, set, DN,
                 RuleSet.strict().withOwnApproach(RuleSet.OwnApproachMode.NEAREST_VALID));
@@ -285,5 +289,20 @@ class RouterTest {
         List<Start> starts = Start.forTarget(t, set, DN, RuleSet.strict());
         assertEquals(3, starts.size(), "берётся не больше трёх различающихся направлений");
         assertTrue(starts.stream().allMatch(s -> s.nearestBoundary));
+    }
+
+    /** Ближайшая граница — узкий внутренний двор: выход из зоны собственного здания во дворе невозможен. */
+    @Test
+    void refusalNamesCourtyardWhenNearestBoundaryIsAHole() {
+        org.locationtech.jts.geom.LinearRing shell = F.createLinearRing(new Coordinate[]{
+                c(0, 0), c(20, 0), c(20, 20), c(0, 20), c(0, 0)});
+        org.locationtech.jts.geom.LinearRing hole = F.createLinearRing(new Coordinate[]{
+                c(8, 8), c(12, 8), c(12, 12), c(8, 12), c(8, 8)});
+        Obstacle own = obstacle(0, "oks", F.createPolygon(shell, new org.locationtech.jts.geom.LinearRing[]{hole}));
+        ObstacleSet set = new ObstacleSet(List.of(own), RuleSet.strict());
+        PlanInput.Target t = new PlanInput.Target(Id.text("cp"), c(10, 7), 20);
+        List<Start.Refusal> why = new java.util.ArrayList<>();
+        assertTrue(Start.forTarget(t, set, DN, RuleSet.strict(), why).isEmpty());
+        assertEquals(Start.Refusal.Code.NEAREST_BOUNDARY_IN_COURTYARD, why.get(0).code);
     }
 }

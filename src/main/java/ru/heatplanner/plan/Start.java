@@ -60,6 +60,42 @@ public final class Start {
 
     /** Возможные старты для цели; пусто, если подойти к точке допустимым финальным участком нельзя. */
     public static List<Start> forTarget(PlanInput.Target target, ObstacleSet obstacles, int dn, RuleSet rules) {
+        return forTarget(target, obstacles, dn, rules, null);
+    }
+
+    /** Причина, по которой подход к цели в рассматриваемом направлении невозможен. */
+    public static final class Refusal {
+        public enum Code {
+            /** Точка подключения вне здания ОКС лежит в запретной зоне другого ограничения. */
+            POINT_IN_OTHER_ZONE,
+            /** Ближайшая граница — внутренний двор, и выход из зоны собственного здания во дворе невозможен. */
+            NEAREST_BOUNDARY_IN_COURTYARD,
+            /** Выход наружу из зоны собственного здания лежит в зоне отступа другого ограничения. */
+            EXIT_IN_OTHER_ZONE,
+            /** Заключительный прямой участок нарушает отступ до другого ограничения. */
+            FINAL_SEGMENT_BLOCKED,
+            /** Ось после выхода остаётся внутри зоны собственного здания (узкий проход). */
+            OWN_ZONE_NOT_LEFT,
+            /** Направление подхода не определено. */
+            NO_DIRECTION
+        }
+
+        public final Code code;
+        /** Ограничение, отступ до которого мешает (или null). */
+        public final Obstacle blocker;
+        /** Расстояние от точки до границы, м. */
+        public final double boundaryDistance;
+
+        Refusal(Code code, Obstacle blocker, double boundaryDistance) {
+            this.code = code;
+            this.blocker = blocker;
+            this.boundaryDistance = boundaryDistance;
+        }
+    }
+
+    /** То же, что forTarget, но причины отказов по рассмотренным границам добавляются в refusals (если он не null). */
+    public static List<Start> forTarget(PlanInput.Target target, ObstacleSet obstacles, int dn, RuleSet rules,
+                                        List<Refusal> refusals) {
         Point cp = F.createPoint(target.xy);
         Set<Obstacle> own = new HashSet<>();
         for (Obstacle o : obstacles.all()) {
@@ -69,37 +105,42 @@ public final class Start {
         }
         List<Start> out = new ArrayList<>();
         if (own.isEmpty()) {
-            if (!obstacles.pointBlocked(target.xy, dn, null)) {
+            Obstacle b = pointBlocker(target.xy, dn, obstacles, null);
+            if (b == null) {
                 out.add(new Start(target.xy, null, Collections.emptySet(), null, target));
+            } else if (refusals != null) {
+                refusals.add(new Refusal(Refusal.Code.POINT_IN_OTHER_ZONE, b, 0));
             }
             return out;
         }
         // Кандидаты: ближайшие точки каждого отрезка границы собственных полигонов; из них берутся ближайшие,
+        // Кандидаты: ближайшие точки каждого отрезка границы собственных полигонов; из них берутся ближайшие,
         // различающиеся направлением (точка в центре здания одинаково близка ко всем его сторонам).
-        List<Coordinate[]> nearest = new ArrayList<>();
+        List<Cand> nearest = new ArrayList<>();
         for (Obstacle o : own) {
-            for (Geometry ring : boundaryParts(o.geometry)) {
-                Coordinate[] cs = ring.getCoordinates();
+            for (Ring ring : boundaryParts(o.geometry)) {
+                Coordinate[] cs = ring.geometry.getCoordinates();
                 for (int i = 1; i < cs.length; i++) {
-                    Coordinate closest = new LineSegment(cs[i - 1], cs[i]).closestPoint(target.xy);
-                    nearest.add(new Coordinate[]{closest, target.xy});
+                    nearest.add(new Cand(new LineSegment(cs[i - 1], cs[i]).closestPoint(target.xy), ring.hole));
                 }
             }
         }
-        nearest.sort((a, b) -> Double.compare(a[0].distance(target.xy), b[0].distance(target.xy)));
+        nearest.sort((a, b) -> Double.compare(a.boundary.distance(target.xy), b.boundary.distance(target.xy)));
         List<double[]> used = new ArrayList<>();
-        double nearestDistance = nearest.isEmpty() ? 0 : nearest.get(0)[0].distance(target.xy);
-        for (Coordinate[] pair : nearest) {
+        double nearestDistance = nearest.isEmpty() ? 0 : nearest.get(0).boundary.distance(target.xy);
+        for (Cand cand : nearest) {
             if (out.size() >= MAX_APPROACHES) {
                 break;
             }
-            Coordinate boundary = pair[0];
-            boolean isNearest = boundary.distance(target.xy) <= nearestDistance + NEAREST_TOLERANCE_M;
+            Coordinate boundary = cand.boundary;
+            double dist = boundary.distance(target.xy);
+            boolean isNearest = dist <= nearestDistance + NEAREST_TOLERANCE_M;
             if (!isNearest && rules.ownApproach == RuleSet.OwnApproachMode.NEAREST_ONLY) {
                 break;
             }
-            double[] u = boundary.distance(target.xy) < 1e-6 ? outwardNormal(own, boundary) : Angles.unit(target.xy, boundary);
+            double[] u = dist < 1e-6 ? outwardNormal(own, boundary) : Angles.unit(target.xy, boundary);
             if (u == null) {
+                refuse(refusals, isNearest, Refusal.Code.NO_DIRECTION, null, dist);
                 continue;
             }
             boolean distinct = true;
@@ -112,16 +153,21 @@ public final class Start {
                 continue;
             }
             Coordinate exit = exitOfOwnZone(boundary, u, own, obstacles, dn);
+            // Выхода нет, если луч от границы упирается в тело здания раньше, чем выходит из зоны (узкий двор).
             if (exit == null) {
+                refuse(refusals, isNearest, cand.hole ? Refusal.Code.NEAREST_BOUNDARY_IN_COURTYARD
+                        : Refusal.Code.OWN_ZONE_NOT_LEFT, null, dist);
                 continue;
             }
-            // Выход обязан быть вне собственных зон: иначе луч из внутреннего двора идёт обратно в тело здания.
-            boolean insideOwnZone = false;
-            for (Obstacle o : own) {
-                insideOwnZone |= obstacles.zone(o, dn).geometry.intersects(F.createPoint(exit));
+            Obstacle atExit = pointBlocker(exit, dn, obstacles, own);
+            if (atExit != null) {
+                refuse(refusals, isNearest, Refusal.Code.EXIT_IN_OTHER_ZONE, atExit, dist);
+                continue;
             }
             // Заключительный прямой участок от выхода из зоны до точки подключения: остальные ограничения действуют.
-            if (insideOwnZone || obstacles.pointBlocked(exit, dn, own) || !obstacles.segmentClear(exit, target.xy, dn, own)) {
+            Obstacle onSegment = obstacles.firstViolation(exit, target.xy, dn, own);
+            if (onSegment != null) {
+                refuse(refusals, isNearest, Refusal.Code.FINAL_SEGMENT_BLOCKED, onSegment, dist);
                 continue;
             }
             used.add(u);
@@ -130,13 +176,50 @@ public final class Start {
         return out;
     }
 
-    private static List<Geometry> boundaryParts(Geometry area) {
-        List<Geometry> parts = new ArrayList<>();
+    /** Отказы записываются только для ближайших границ: по ним и решается, можно ли подойти строго по правилу. */
+    private static void refuse(List<Refusal> refusals, boolean nearest, Refusal.Code code, Obstacle blocker, double dist) {
+        if (refusals != null && nearest) {
+            refusals.add(new Refusal(code, blocker, dist));
+        }
+    }
+
+    private static Obstacle pointBlocker(Coordinate p, int dn, ObstacleSet obstacles, Set<Obstacle> exempt) {
+        Point point = F.createPoint(p);
+        for (Obstacle o : obstacles.near(point.getEnvelopeInternal(), dn)) {
+            if ((exempt == null || !exempt.contains(o)) && obstacles.zone(o, dn).prepared.intersects(point)) {
+                return o;
+            }
+        }
+        return null;
+    }
+
+    private static final class Cand {
+        final Coordinate boundary;
+        final boolean hole;
+
+        Cand(Coordinate boundary, boolean hole) {
+            this.boundary = boundary;
+            this.hole = hole;
+        }
+    }
+
+    private static final class Ring {
+        final Geometry geometry;
+        final boolean hole;
+
+        Ring(Geometry geometry, boolean hole) {
+            this.geometry = geometry;
+            this.hole = hole;
+        }
+    }
+
+    private static List<Ring> boundaryParts(Geometry area) {
+        List<Ring> parts = new ArrayList<>();
         for (int i = 0; i < area.getNumGeometries(); i++) {
             org.locationtech.jts.geom.Polygon p = (org.locationtech.jts.geom.Polygon) area.getGeometryN(i);
-            parts.add(p.getExteriorRing());
+            parts.add(new Ring(p.getExteriorRing(), false));
             for (int h = 0; h < p.getNumInteriorRing(); h++) {
-                parts.add(p.getInteriorRingN(h));
+                parts.add(new Ring(p.getInteriorRingN(h), true));
             }
         }
         return parts;
@@ -161,21 +244,29 @@ public final class Start {
     /**
      * Точка на луче от границы наружу, где ось выходит из зоны отступа собственного полигона (чуть за ней).
      * Зона считается для ДУ dn по тем же правилам, что и при проверках; вычислительный запас уже в ней.
+     * Луч идёт от границы непрерывно: если раньше выхода из зоны он входит в тело собственного здания (ближайшая
+     * граница — двор, за которым снова здание), выхода наружу нет и возвращается null.
      */
     private static Coordinate exitOfOwnZone(Coordinate boundary, double[] u, Set<Obstacle> own, ObstacleSet obstacles, int dn) {
         double reach = 0;
         for (Obstacle o : own) {
             reach = Math.max(reach, o.axisDistance(dn));
         }
-        LineString ray = F.createLineString(new Coordinate[]{boundary,
-                new Coordinate(boundary.x + u[0] * (reach + 20), boundary.y + u[1] * (reach + 20))});
-        double exit = 0;
-        for (Obstacle o : own) {
-            Geometry inside = obstacles.zone(o, dn).geometry.intersection(ray);
-            for (Coordinate c : inside.getCoordinates()) {
-                exit = Math.max(exit, boundary.distance(c));
+        final double step = 0.05;
+        for (double s = step; s <= reach + 20; s += step) {
+            Coordinate p = new Coordinate(boundary.x + u[0] * s, boundary.y + u[1] * s);
+            Point point = F.createPoint(p);
+            boolean inZone = false;
+            for (Obstacle o : own) {
+                if (o.geometry.covers(point)) {
+                    return null;
+                }
+                inZone |= obstacles.zone(o, dn).prepared.intersects(point);
+            }
+            if (!inZone) {
+                return p;
             }
         }
-        return new Coordinate(boundary.x + u[0] * (exit + 0.02), boundary.y + u[1] * (exit + 0.02));
+        return null;
     }
 }
