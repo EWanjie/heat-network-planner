@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import ru.heatplanner.plan.Branch;
 import ru.heatplanner.plan.JointPlanner;
+import ru.heatplanner.plan.OutputBuilder;
 import ru.heatplanner.plan.ObstacleSet;
 import ru.heatplanner.plan.PlanInput;
 import ru.heatplanner.plan.PlanValidator;
@@ -50,6 +51,7 @@ public class PlanController {
     }
 
     private Prepared last;
+    private List<Variants.Variant> lastVariants;
 
     @PostMapping("/api/plan")
     public synchronized ResponseEntity<?> plan(@RequestParam("file") MultipartFile file) throws IOException {
@@ -69,6 +71,7 @@ public class PlanController {
             }
             long started = System.currentTimeMillis();
             List<Variants.Variant> variants = Variants.generate(last.input, last.obstacles, last.planner, 3);
+            lastVariants = variants;
             List<Object> described = new ArrayList<>();
             int rank = 1;
             for (Variants.Variant v : variants) {
@@ -84,6 +87,18 @@ public class PlanController {
         } finally {
             Files.deleteIfExists(temp);
         }
+    }
+
+    /** Результат последнего расчёта в формате раздела 7 приложения: один FeatureCollection со всеми вариантами. */
+    @org.springframework.web.bind.annotation.GetMapping("/api/plan/export")
+    public synchronized ResponseEntity<?> export() {
+        if (lastVariants == null) {
+            return ResponseEntity.status(409).body("Сначала выполните расчёт.");
+        }
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"variants_2d.geojson\"")
+                .contentType(org.springframework.http.MediaType.parseMediaType("application/geo+json"))
+                .body(OutputBuilder.build(lastVariants));
     }
 
     private static String digest(Path file) throws IOException {

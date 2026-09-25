@@ -41,13 +41,33 @@ public final class Variants {
         List<PlanInput.Target> byFlow = new ArrayList<>(in.targets);
         byFlow.sort(Comparator.comparingDouble((PlanInput.Target t) -> -t.flow));
 
+        // Стратегии считаются одновременно: у них общие графы видимости, а поиск внутри каждой тоже параллельный.
+        List<Object[]> configs = new ArrayList<>();
+        configs.add(new Object[]{nearest, Router.Profile.BALANCED, "Сначала ближние к сети точки, баланс стоимости и длины"});
+        configs.add(new Object[]{farthest, Router.Profile.BALANCED, "Сначала дальние от сети точки, баланс стоимости и длины"});
+        configs.add(new Object[]{nearest, Router.Profile.COMPACT, "Сначала ближние точки, наименьшая длина новой сети"});
+        configs.add(new Object[]{nearest, Router.Profile.ECONOMIC, "Сначала ближние точки, наименьшая стоимость труб"});
+        configs.add(new Object[]{byFlow, Router.Profile.BALANCED, "Сначала точки с наибольшим расходом"});
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(configs.size());
+        List<java.util.concurrent.Future<Variant>> futures = new ArrayList<>();
+        for (Object[] c : configs) {
+            @SuppressWarnings("unchecked")
+            List<PlanInput.Target> order = (List<PlanInput.Target>) c[0];
+            futures.add(pool.submit(() -> build(in, exact, planner, order, (Router.Profile) c[1], (String) c[2])));
+        }
         List<Variant> all = new ArrayList<>();
-        add(all, in, exact, planner, nearest, Router.Profile.BALANCED, "Сначала ближние к сети точки, баланс стоимости и длины");
-        add(all, in, exact, planner, farthest, Router.Profile.BALANCED, "Сначала дальние от сети точки, баланс стоимости и длины");
-        add(all, in, exact, planner, nearest, Router.Profile.COMPACT, "Сначала ближние точки, наименьшая длина новой сети");
-        add(all, in, exact, planner, nearest, Router.Profile.ECONOMIC, "Сначала ближние точки, наименьшая стоимость труб");
-        add(all, in, exact, planner, byFlow, Router.Profile.BALANCED, "Сначала точки с наибольшим расходом");
-
+        try {
+            for (java.util.concurrent.Future<Variant> f : futures) {
+                Variant v = f.get();
+                if (v != null) {
+                    all.add(v);
+                }
+            }
+        } catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+            throw new IllegalStateException(e);
+        } finally {
+            pool.shutdown();
+        }
         all.sort(Comparator.comparingDouble(v -> v.solution.score()));
         List<Variant> chosen = new ArrayList<>();
         for (Variant v : all) {
@@ -68,18 +88,17 @@ public final class Variants {
         return chosen;
     }
 
-    private static void add(List<Variant> all, PlanInput in, ObstacleSet exact, JointPlanner planner,
-                            List<PlanInput.Target> order, Router.Profile profile, String strategy) {
+    private static Variant build(PlanInput in, ObstacleSet exact, JointPlanner planner, List<PlanInput.Target> order,
+                                 Router.Profile profile, String strategy) {
         JointPlanner.Solution s = planner.planBest(order, 3, profile);
         List<PlanValidator.Violation> v = PlanValidator.validateTree(in, exact, s.branches, s.evaluation);
         for (PlanValidator.Violation x : v) {
             if (x.group == PlanValidator.Group.RULE) {
-                return;
+                return null;
             }
         }
-        all.add(new Variant(s, strategy, v));
+        return new Variant(s, strategy, v);
     }
-
     static double distanceToNetwork(PlanInput in, PlanInput.Target t) {
         double d = Double.MAX_VALUE;
         org.locationtech.jts.geom.Point p = new org.locationtech.jts.geom.GeometryFactory().createPoint(t.xy);

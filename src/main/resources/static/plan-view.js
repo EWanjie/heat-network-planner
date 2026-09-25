@@ -194,12 +194,39 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
             variants = (await response.json()).variants;
             variants.forEach((_, index) => build(index));
             state = "ready";
+            enableExport();
         } catch (e) {
             state = "error";
             error = "Расчёт не выполнен: " + e.message;
         }
         fitted = false;
         show();
+    }
+
+    // Выгрузка всех вариантов в GeoJSON по разделу 7 приложения.
+    function enableExport() {
+        const button = document.getElementById("exportButton");
+        button.disabled = false;
+        button.title = "Выгрузить все варианты в GeoJSON";
+        button.onclick = async () => {
+            button.disabled = true;
+            try {
+                const response = await fetch("/api/plan/export");
+                if (!response.ok) throw new Error(await response.text());
+                const url = URL.createObjectURL(await response.blob());
+                const link = document.createElement("a");
+                link.href = url;
+                link.download = "variants_2d.geojson";
+                document.body.append(link);
+                link.click();
+                link.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+            } catch (e) {
+                alert("Не удалось выгрузить данные: " + e.message);
+            } finally {
+                button.disabled = false;
+            }
+        };
     }
 
     let fitted = false;

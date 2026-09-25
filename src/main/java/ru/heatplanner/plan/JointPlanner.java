@@ -91,7 +91,6 @@ public final class JointPlanner {
     private volatile Router exactRouter;
     private final RuleSet exactRules;
     private final RuleSet rules;
-    private volatile Router.Profile profile = Router.Profile.BALANCED;
 
     public JointPlanner(PlanInput in, ObstacleSet exact, RuleSet rules) {
         this.in = in;
@@ -108,8 +107,7 @@ public final class JointPlanner {
      * берётся решение с лучшим показателем (штраф за неподключённые уже в нём).
      */
     public Solution planBest(List<PlanInput.Target> order, int attempts, Router.Profile profile) {
-        this.profile = profile;
-        Solution best = plan(order);
+        Solution best = plan(order, profile);
         List<PlanInput.Target> current = order;
         for (int a = 1; a < attempts; a++) {
             List<PlanInput.Target> stuck = new ArrayList<>();
@@ -128,7 +126,7 @@ public final class JointPlanner {
                 }
             }
             current = next;
-            Solution s = plan(next);
+            Solution s = plan(next, profile);
             if (s.score() < best.score()) {
                 best = s;
             } else {
@@ -138,7 +136,7 @@ public final class JointPlanner {
         return best;
     }
 
-    public Solution plan(List<PlanInput.Target> order) {
+    public Solution plan(List<PlanInput.Target> order, Router.Profile profile) {
         List<Branch> branches = new ArrayList<>();
         List<Unconnected> bad = new ArrayList<>();
         for (PlanInput.Target t : order) {
@@ -147,7 +145,7 @@ public final class JointPlanner {
             double bestScore = Double.MAX_VALUE;
             String reason = "маршрут не найден";
             List<String> reasons = new ArrayList<>();
-            for (Branch candidate : candidates(t, branches, reasons)) {
+            for (Branch candidate : candidates(t, branches, reasons, profile)) {
                 List<Branch> trial = new ArrayList<>(branches);
                 trial.add(candidate);
                 TreeEvaluator.Result r = TreeEvaluator.evaluate(in, exact, trial);
@@ -207,7 +205,7 @@ public final class JointPlanner {
         }
     }
 
-    private List<Branch> candidates(PlanInput.Target t, List<Branch> branches, List<String> reasons) {
+    private List<Branch> candidates(PlanInput.Target t, List<Branch> branches, List<String> reasons, Router.Profile profile) {
         List<Branch> out = new ArrayList<>();
         int first = Rules.indexForFlow(t.flow);
         if (first < 0) {
@@ -225,7 +223,7 @@ public final class JointPlanner {
         final Geometry wall = barrier;
         List<Future<Found>> tasks = new ArrayList<>();
         // 1. Существующая сеть.
-        tasks.add(POOL.submit(() -> search(t, first, null, branches, wall)));
+        tasks.add(POOL.submit(() -> search(t, first, null, branches, wall, profile)));
         // 2. Ближайшие уже построенные ветви.
         List<Integer> near = new ArrayList<>();
         for (int i = 0; i < branches.size(); i++) {
@@ -243,7 +241,7 @@ public final class JointPlanner {
                 continue;
             }
             taken++;
-            tasks.add(POOL.submit(() -> search(t, first, onto, branches, wall)));
+            tasks.add(POOL.submit(() -> search(t, first, onto, branches, wall, profile)));
         }
         for (Future<Found> f : tasks) {
             try {
@@ -261,7 +259,7 @@ public final class JointPlanner {
     }
 
     /** Трасса цели к сети (onto == null) или к точкам одной ветви; ДУ растёт, пока трасса не уложится в предельную длину. */
-    private Found search(PlanInput.Target t, int firstDn, Branch onto, List<Branch> branches, Geometry barrier) {
+    private Found search(PlanInput.Target t, int firstDn, Branch onto, List<Branch> branches, Geometry barrier, Router.Profile profile) {
         List<String> reasons = new ArrayList<>();
         for (int i = firstDn; i < Math.min(Rules.DN.length, firstDn + MAX_DN_STEPS); i++) {
             int dn = Rules.DN[i];
