@@ -73,6 +73,11 @@ public final class RuleSet {
         return new RuleSet(0.01, 32, LineCrossingMode.STRICT, RoadWidthPolicy.REQUIRE_WIDTH, 45, OwnApproachMode.NEAREST_ONLY);
     }
 
+    /** Те же правила с другим вычислительным запасом к отступам (для запаса под будущее увеличение диаметра). */
+    public RuleSet withGeometryEps(double eps) {
+        return new RuleSet(eps, bufferQuadrantSegments, lineCrossing, roadWidth, tieInApproachMinAngleDeg, ownApproach);
+    }
+
     /** Те же правила, но с запасным подходом к ближайшей допустимой границе здания. */
     public RuleSet withOwnApproach(OwnApproachMode mode) {
         return new RuleSet(geometryEps, bufferQuadrantSegments, lineCrossing, roadWidth, tieInApproachMinAngleDeg, mode);

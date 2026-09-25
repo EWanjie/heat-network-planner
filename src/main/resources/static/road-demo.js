@@ -23,9 +23,9 @@ window.mountRoadDemo = function (map, store, legendItems, isInputTab) {
     let loadedAt = null;
     function sync() {
         const state = store.snapshot();
-        row.hidden = !isInputTab();
+        row.hidden = false;
         check.disabled = state.status !== "ready";
-        layer.setVisible(isInputTab() && check.checked && state.status === "ready");
+        layer.setVisible(check.checked && state.status === "ready");
     }
     check.addEventListener("change", sync);
     function update() {

@@ -109,6 +109,11 @@ public final class Router {
     }
 
     public Result findRoute(Start start, List<Goal> goals, int dn, Profile profile, double lengthBudget) {
+        return findRoute(start, goals, dn, profile, lengthBudget, null);
+    }
+
+    /** Поиск с преградой: трасса не должна пересекать barrier (уже построенные ветви), кроме как в самой точке присоединения. */
+    public Result findRoute(Start start, List<Goal> goals, int dn, Profile profile, double lengthBudget, Geometry barrier) {
         if (goals.isEmpty()) {
             return new Result(null, "NO_GOALS");
         }
@@ -119,7 +124,7 @@ public final class Router {
         String status = "NO_ROUTE_ON_GRAPH";
         for (double factor : CORRIDOR_FACTORS) {
             double limit = factor * direct + CORRIDOR_SLACK_M;
-            Search search = new Search(start, goals, dn, profile, lengthBudget, limit);
+            Search search = new Search(start, goals, dn, profile, lengthBudget, limit, barrier);
             Route route = search.run();
             status = search.status;
             // Найденный путь короче границы коридора: он оптимален и по вершинам вне коридора.
@@ -206,16 +211,16 @@ public final class Router {
     private final class Visibility {
         final int dn;
         final Coordinate[] v;
-        final int[][] adj;
+        final java.util.concurrent.atomic.AtomicReferenceArray<int[]> adj;
 
         Visibility(int dn) {
             this.dn = dn;
             this.v = vertices(dn);
-            this.adj = new int[v.length][];
+            this.adj = new java.util.concurrent.atomic.AtomicReferenceArray<>(v.length);
         }
 
         int[] neighbors(int i) {
-            int[] a = adj[i];
+            int[] a = adj.get(i);
             if (a == null) {
                 int[] tmp = new int[v.length];
                 int n = 0;
@@ -225,7 +230,7 @@ public final class Router {
                     }
                 }
                 a = Arrays.copyOf(tmp, n);
-                adj[i] = a;
+                adj.set(i, a);
             }
             return a;
         }
@@ -285,7 +290,12 @@ public final class Router {
         String status = "NO_ROUTE_ON_GRAPH";
         int labels;
 
-        Search(Start start, List<Goal> goals, int dn, Profile profile, double budget, double limit) {
+        final Geometry barrierGeometry;
+        final org.locationtech.jts.geom.prep.PreparedGeometry barrier;
+
+        Search(Start start, List<Goal> goals, int dn, Profile profile, double budget, double limit, Geometry barrierGeometry) {
+            this.barrierGeometry = barrierGeometry;
+            this.barrier = barrierGeometry == null ? null : org.locationtech.jts.geom.prep.PreparedGeometryFactory.prepare(barrierGeometry);
             this.start = start;
             this.goals = goals;
             this.dn = dn;
@@ -307,6 +317,30 @@ public final class Router {
                 }
             }
             this.corridor = in.stream().mapToInt(Integer::intValue).toArray();
+        }
+
+        /** Отрезок ab пересекает преграду; касание в allowedEnd (место присоединения) допустимо. */
+        boolean blocked(Coordinate a, Coordinate b, Coordinate allowedEnd) {
+            if (barrier == null) {
+                return false;
+            }
+            LineString seg = factory.createLineString(new Coordinate[]{a, b});
+            if (!barrier.intersects(seg)) {
+                return false;
+            }
+            if (allowedEnd == null) {
+                return true;
+            }
+            Geometry inter = seg.intersection(barrierGeometry);
+            if (inter.getLength() > 0.05) {
+                return true;
+            }
+            for (Coordinate c : inter.getCoordinates()) {
+                if (c.distance(allowedEnd) > 0.05) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         double nearestGoalDistance(Coordinate c) {
@@ -405,7 +439,7 @@ public final class Router {
                 return;
             }
             double[] dir = Angles.unit(p, w);
-            if (!turnOk(l.dir, dir) || (check && !obstacles.segmentClear(p, w, dn, null))) {
+            if (!turnOk(l.dir, dir) || (check && !obstacles.segmentClear(p, w, dn, null)) || blocked(p, w, null)) {
                 return;
             }
             double cost = l.cost + d * price;
@@ -445,7 +479,7 @@ public final class Router {
                         double d = p.distance(q);
                         double[] dir = Angles.unit(p, q);
                         if (d < 1e-6 || l.length + d > budget || !turnOk(l.dir, dir)
-                                || obstacles.pointBlocked(q, dn, null) || !obstacles.segmentClear(p, q, dn, null)) {
+                                || obstacles.pointBlocked(q, dn, null) || !obstacles.segmentClear(p, q, dn, null) || blocked(p, q, null)) {
                             continue;
                         }
                         finalApproach(l, q, gi, g, p, List.of(new Route.Leg(p, q, false, 1, List.of(), false, false)));
@@ -473,7 +507,10 @@ public final class Router {
             if (g.lineDirection != null && Angles.acuteDeg(dir, g.lineDirection) < rules.tieInApproachMinAngleDeg - 1e-9) {
                 return;
             }
-            if (!obstacles.segmentClear(from, g.xy, dn, g.exempt)) {
+            if (g.joinDirection != null && Angles.turnDeg(dir, g.joinDirection) > maxTurnDeg + 1e-9) {
+                return;
+            }
+            if (!obstacles.segmentClear(from, g.xy, dn, g.exempt) || blocked(from, g.xy, g.xy)) {
                 return;
             }
             double cost = l.cost + (extra + d) * price;
@@ -623,7 +660,7 @@ public final class Router {
             if (first > 1e-6 && !obstacles.segmentClear(p, p1, dn, null)) {
                 return;
             }
-            if (!obstacles.segmentClear(p1, p2, dn, crossed)) {
+            if (!obstacles.segmentClear(p1, p2, dn, crossed) || blocked(p, p2, null)) {
                 return;
             }
             // Вне специального интервала отступ до пересекаемых объектов обязан соблюдаться: его концы за пределами зон.

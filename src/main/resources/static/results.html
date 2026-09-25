@@ -4,14 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Моделирование трасс подключения к тепловым сетям</title>
-    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260925-diagnostics">
-    <link rel="stylesheet" href="/app.css?v=20260925-diagnostics">
-    <script src="/lib/openlayers/ol.js?v=20260925-diagnostics" defer></script>
-    <script src="/dataset-store.js?v=20260925-diagnostics" defer></script>
-    <script src="/schematic-basemap.js?v=20260925-diagnostics" defer></script>
-    <script src="/road-enrichment.js?v=20260925-diagnostics" defer></script>
-    <script src="/road-demo.js?v=20260925-diagnostics" defer></script>
-    <script src="/results.js?v=20260925-diagnostics" defer></script>
+    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260925-plan6">
+    <link rel="stylesheet" href="/app.css?v=20260925-plan6">
+    <script src="/lib/openlayers/ol.js?v=20260925-plan6" defer></script>
+    <script src="/dataset-store.js?v=20260925-plan6" defer></script>
+    <script src="/schematic-basemap.js?v=20260925-plan6" defer></script>
+    <script src="/road-enrichment.js?v=20260925-plan6" defer></script>
+    <script src="/road-demo.js?v=20260925-plan6" defer></script>
+    <script src="/plan-view.js?v=20260925-plan6" defer></script>
+    <script src="/results.js?v=20260925-plan6" defer></script>
 </head>
 <body class="results-page">
 <header class="topbar">
@@ -34,7 +35,7 @@
             <h2 class="composition-heading">Состав данных</h2><ul id="typeCounts" class="counts"></ul>
             <h2 id="warningsHeading" class="composition-heading" hidden>Диагностика данных</h2><ul id="dataWarnings" class="warnings"></ul>
         </div>
-        <p id="solutionSummary" class="solution-placeholder" aria-live="polite" hidden></p>
+        <div id="solutionSummary" class="solution-summary" aria-live="polite" hidden></div>
     </aside>
     <section class="map-section" aria-label="Карта объектов">
         <div class="map-frame">

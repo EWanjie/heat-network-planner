@@ -24,6 +24,7 @@ const MAX_PREVIEW_BYTES = 100 * 1024 * 1024;
 let resetMapState = () => {};
 let currentResultTab = "input";
 let syncRoadDemo = () => {};
+let syncSolution = () => {};
 
 function labelFor(key) {
     return key.startsWith("restriction:") ? (RESTRICTION_LABELS[key.slice(12)] || key.slice(12)) : (OBJECT_LABELS[key] || key);
@@ -102,6 +103,7 @@ function setupResultTabs() {
         document.querySelector(".statistics").scrollTop = 0;
         if (selectedIndex !== index) resetMapState();
         syncRoadDemo();
+        syncSolution(tab.solutionNumber);
         selectedIndex = index;
         if (focus) buttons[index].focus();
     }
@@ -225,6 +227,7 @@ function renderMap(geojson, workingDataset) {
         legendRow(key, labelFor(key), color, layer);
     }
     syncRoadDemo = mountRoadDemo(map, workingDataset, legendItems, () => currentResultTab === "input");
+    syncSolution = mountPlan(map, window.uploadedFile, legendItems, document.getElementById("solutionSummary"));
     legendRow("map", "Карта", "#737373", base);
     const popupElement = document.createElement("div");
     popupElement.className = "map-popup";
@@ -302,6 +305,7 @@ function renderMap(geojson, workingDataset) {
             event.returnValue = "Данные могут не сохраниться";
         });
         const {file, summary} = data;
+        window.uploadedFile = file;
         document.getElementById("datasetName").textContent = file.name;
         document.getElementById("totalObjects").textContent = summary.totalObjects.toLocaleString("ru-RU");
         renderInputSummary(summary);

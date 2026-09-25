@@ -74,8 +74,8 @@ public final class Start {
             EXIT_IN_OTHER_ZONE,
             /** Заключительный прямой участок нарушает отступ до другого ограничения. */
             FINAL_SEGMENT_BLOCKED,
-            /** Ось после выхода остаётся внутри зоны собственного здания (узкий проход). */
-            OWN_ZONE_NOT_LEFT,
+            /** Ближайшая стена в узкой выемке здания: прямой выход наружу упирается в другое крыло того же здания. */
+            NEAREST_WALL_IN_NOTCH,
             /** Направление подхода не определено. */
             NO_DIRECTION
         }
@@ -90,6 +90,25 @@ public final class Start {
             this.code = code;
             this.blocker = blocker;
             this.boundaryDistance = boundaryDistance;
+        }
+
+        /** Причина для пользователя: почему к этому зданию строго по правилу подключиться нельзя. */
+        public String message() {
+            String who = blocker == null ? "" : " (" + blocker + ")";
+            switch (code) {
+                case POINT_IN_OTHER_ZONE:
+                    return "точка подключения лежит в зоне отступа другого объекта" + who;
+                case NEAREST_BOUNDARY_IN_COURTYARD:
+                    return "ближайшая к точке граница здания находится во внутреннем дворе, выход из зоны отступа невозможен";
+                case NEAREST_WALL_IN_NOTCH:
+                    return "ближайшая стена в узкой выемке здания, прямой участок упирается в другое крыло того же здания";
+                case EXIT_IN_OTHER_ZONE:
+                    return "выход от ближайшей стены попадает в зону отступа другого объекта" + who;
+                case FINAL_SEGMENT_BLOCKED:
+                    return "финальный прямой участок нарушает отступ до другого объекта" + who;
+                default:
+                    return "направление подхода не определено";
+            }
         }
     }
 
@@ -156,7 +175,7 @@ public final class Start {
             // Выхода нет, если луч от границы упирается в тело здания раньше, чем выходит из зоны (узкий двор).
             if (exit == null) {
                 refuse(refusals, isNearest, cand.hole ? Refusal.Code.NEAREST_BOUNDARY_IN_COURTYARD
-                        : Refusal.Code.OWN_ZONE_NOT_LEFT, null, dist);
+                        : Refusal.Code.NEAREST_WALL_IN_NOTCH, null, dist);
                 continue;
             }
             Obstacle atExit = pointBlocker(exit, dn, obstacles, own);

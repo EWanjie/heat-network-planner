@@ -220,3 +220,27 @@ p { line-height: 1.6; }
 .road-import-info { margin-top: 24px; padding-top: 16px; border-top: 1px solid #39333f; }
 .road-import-info p { font-size: 12px; margin-bottom: 10px; }
 .road-import-info button { font-size: 12px; padding: 8px 10px; }
+.plan-note { margin: 8px 0 12px; font-size: 13px; line-height: 1.5; color: #c9c3d3; }
+.plan-note.error { color: #ff8a8a; }
+.solution-summary h2 { margin: 0 0 8px; font-size: 17px; font-weight: 600; }
+
+.plan-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 0 0 14px; }
+.plan-stat { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: #26232f; border-radius: 8px; min-width: 0; }
+.plan-stat.wide { grid-column: 1 / -1; background: #33203f; }
+.plan-stat-label { font-size: 12px; color: #a9a2b8; overflow-wrap: anywhere; }
+.plan-stat-value { font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+.plan-heading { margin: 16px 0 6px; font-size: 13px; font-weight: 600; color: #c9c3d3; text-transform: uppercase; letter-spacing: .05em; }
+.plan-heading.bad { color: #ff8a8a; }
+.plan-list { display: flex; flex-direction: column; gap: 4px; }
+.plan-item { display: flex; gap: 10px; align-items: flex-start; width: 100%; padding: 8px 10px; text-align: left; font: inherit; color: inherit; background: #221f2a; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+.plan-item:hover { background: #2d2938; }
+.plan-item.active { border-color: #ffffff; background: #332f40; }
+.plan-item.unconnected { background: #2d1f26; }
+.plan-item .swatch { margin-top: 3px; flex-shrink: 0; }
+.plan-item-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13px; }
+.plan-item-meta { font-size: 12px; color: #b9b2c6; line-height: 1.4; }
+.plan-stat.ok .plan-stat-value { color: #80f2a3; }
+.plan-stat.warn .plan-stat-value { color: #ffd166; }
+.plan-stat.bad .plan-stat-value { color: #ff8a8a; }
+.plan-violations { margin: -6px 0 12px; font-size: 12px; }
+.plan-violations summary { cursor: pointer; color: #c9c3d3; margin-bottom: 6px; }
