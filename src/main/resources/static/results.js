@@ -64,6 +64,16 @@ function renderInputSummary(summary) {
     const rank = key => order.includes(key) ? order.indexOf(key) : order.length;
     const entries = [...counts].sort(([a], [b]) => rank(a) - rank(b) || labelFor(a).localeCompare(labelFor(b), "ru"));
     countsInto("typeCounts", Object.fromEntries(entries), Object.fromEntries(entries.map(([key]) => [key, labelFor(key)])));
+    renderDataWarnings(summary.warnings || []);
+}
+// Замечания сервера к данным: файл принят, но на что-то стоит обратить внимание (диагностика данных).
+function renderDataWarnings(warnings) {
+    document.getElementById("warningsHeading").hidden = !warnings.length;
+    document.getElementById("dataWarnings").replaceChildren(...warnings.map(text => {
+        const item = document.createElement("li");
+        item.textContent = text;
+        return item;
+    }));
 }
 
 function setupResultTabs() {

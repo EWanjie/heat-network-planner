@@ -1,1 +1,6 @@
-{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[37.6000,55.7500]},"properties":{"id":"src_1","object_type":"source"}},{"type":"Feature","geometry":{"type":"Point","coordinates":[999,55.7]},"properties":{"id":"cp_1","object_type":"oks_connection_point"}},{"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.6,55.7],[37.61,55.7],[37.61,55.71]]]},"properties":{"id":"oks_1","object_type":"oks_existing"}},{"type":"Feature","geometry":{"type":"Point"},"properties":{"id":"r1","object_type":"restriction","restriction_type":"water"}}]}
+{"type":"FeatureCollection","features":[
+  {"type":"Feature","geometry":{"type":"Point","coordinates":[37.6,55.75]},"properties":{"id":"src_1","object_type":"source"}},
+  {"type":"Feature","geometry":{"type":"Point","coordinates":[37.6,55.75]},"properties":{"id":"net_bad","object_type":"heat_network","diameter":100}},
+  {"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.605,55.753],[37.606,55.754]]},"properties":{"id":"cp_bad","object_type":"oks_connection_point","flow_tph":10}},
+  {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.6,55.75],[37.601,55.75],[37.601,55.751],[37.6,55.75]]]},"properties":{"id":"ch_bad","object_type":"heat_chamber"}}
+]}

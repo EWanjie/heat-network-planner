@@ -215,6 +215,8 @@ p { line-height: 1.6; }
     #exportButton { padding: 10px 12px; font-size: 13px; }
 }
 
+.warnings { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.5; color: #FFD6E4; }
+.warnings li { margin-bottom: 9px; }
 .road-import-info { margin-top: 24px; padding-top: 16px; border-top: 1px solid #39333f; }
 .road-import-info p { font-size: 12px; margin-bottom: 10px; }
 .road-import-info button { font-size: 12px; padding: 8px 10px; }

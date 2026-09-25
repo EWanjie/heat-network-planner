@@ -7,5 +7,7 @@
   {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.605,55.753],[37.6055,55.753],[37.6055,55.7534],[37.605,55.7534],[37.605,55.753]]]},"properties":{"id":"oks_1","object_type":"restriction","restriction_type":"oks"}},
   {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.607,55.75],[37.6075,55.75],[37.6075,55.7504],[37.607,55.7504],[37.607,55.75]]]},"properties":{"id":"oks_2","object_type":"restriction","restriction_type":"oks"}},
   {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.6042,55.7521],[37.6046,55.7521],[37.6046,55.7529],[37.6042,55.7529],[37.6042,55.7521]]]},"properties":{"id":"road_1","object_type":"restriction","restriction_type":"road"}},
-  {"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.6030,55.7540],[37.6060,55.7525]]},"properties":{"id":"gas_1","object_type":"restriction","restriction_type":"gas_pipeline"}}
+  {"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.6030,55.7540],[37.6060,55.7525]]},"properties":{"id":"gas_1","object_type":"restriction","restriction_type":"gas_pipeline"}},
+  {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.6080,55.7500],[37.6085,55.7500],[37.6085,55.7504],[37.6080,55.7504],[37.6080,55.7500]]]},"properties":{"id":"oks_f1","object_type":"oks_future","flow_tph":10}},
+  {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.609,55.75],[37.6095,55.75],[37.6095,55.7504],[37.609,55.7504],[37.609,55.75]]]},"properties":{"id":"metro_1","object_type":"restriction","restriction_type":"metro"}}
 ]}

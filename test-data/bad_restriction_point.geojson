@@ -1,7 +1,6 @@
 {"type":"FeatureCollection","features":[
   {"type":"Feature","geometry":{"type":"Point","coordinates":[37.6,55.75]},"properties":{"id":"src_1","object_type":"source"}},
   {"type":"Feature","geometry":{"type":"LineString","coordinates":[[37.6000,55.7500],[37.6020,55.7510]]},"properties":{"id":"net_1","object_type":"heat_network","diameter":300}},
-  {"type":"Feature","properties":{"id":"ch_x","object_type":"heat_chamber"}},
   {"type":"Feature","geometry":{"type":"Point","coordinates":[37.605,55.7532]},"properties":{"id":"cp_1","object_type":"oks_connection_point","flow_tph":80.0}},
-  {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[37.605,55.753],[37.6055,55.753],[37.6055,55.7534],[37.605,55.7534],[37.605,55.753]]]},"properties":{"id":"oks_1","object_type":"restriction","restriction_type":"oks"}}
+  {"type":"Feature","geometry":{"type":"Point","coordinates":[37.603,55.7515]},"properties":{"id":"pt_1","object_type":"restriction","restriction_type":"road"}}
 ]}

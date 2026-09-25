@@ -19,10 +19,20 @@ import java.util.TreeMap;
 
 /**
  * Первый этап обработки: потоковое чтение GeoJSON, проверка структуры и инвентаризация объектов.
- * Это не полный валидатор задания: проверяет только общую структуру и id/тип объектов,
- * а данные существующей сети (диаметры, связи) передаёт в {@link ExistingNetworkBuilder}.
+ * Проверяет структуру, геометрию, id/тип объектов и обязательные атрибуты по актуальному техническому приложению,
+ * а данные существующей сети (диаметры, камеры, связность) передаёт в {@link ExistingNetworkBuilder}.
+ * Всё, что не мешает расчёту, но требует внимания, попадает в список замечаний (warnings), а не отклоняет файл.
  */
 public class GeoJsonInspector {
+
+    /** Типы ограничений, для которых в таблице 2 приложения есть правило. Остальные типы — расширение, необязательное. */
+    static final Set<String> SUPPORTED_RESTRICTIONS = new HashSet<>(java.util.Arrays.asList(
+            "oks", "park", "social_area", "prohibited_site", "water", "railway", "road", "tram_tracks",
+            "gas_pipeline", "power_cable", "heat_network"));
+
+    /** Типы объектов базового состава (раздел 1.1 приложения). */
+    private static final Set<String> BASE_TYPES = new HashSet<>(java.util.Arrays.asList(
+            "source", "heat_network", "heat_chamber", "oks_connection_point", "restriction"));
 
     /** Сколько ошибок геометрии показывать в сообщении (общее число считается полностью). */
     private static final int MAX_REPORTED_GEOMETRY_ERRORS = 20;
@@ -44,6 +54,8 @@ public class GeoJsonInspector {
         public Map<String, Long> restrictionCounts;
         /** Сводка по существующей сети (см. ExistingNetworkBuilder). */
         public ExistingNetworkBuilder.NetworkSummary network;
+        /** Замечания к данным: файл принят, но на что-то стоит обратить внимание (диагностика данных). */
+        public List<String> warnings;
     }
 
     /** Запуск из командной строки или IDE: путь к файлу — единственный аргумент. Нужен для ручных проверок. */
@@ -78,6 +90,7 @@ public class GeoJsonInspector {
         List<String> geometryErrors = new ArrayList<>();
         long geometryErrorCount = 0;
         long total = 0;
+        long zeroFlowPoints = 0;
         boolean featuresFound = false;
         String rootType = null;
 
@@ -110,15 +123,15 @@ public class GeoJsonInspector {
                         JsonNode properties = feature.path("properties");
                         require(properties.isObject(), "Нет properties у Feature #" + (total + 1));
 
-                        // id может прийти и строкой, и числом (так отдают многие ГИС-инструменты) —
-                        // принимаем оба варианта и приводим к строке.
+                        // id может быть строкой или числом; строка "1" и число 1 — разные идентификаторы,
+                        // поэтому тип входит в ключ проверки уникальности (формат id не интерпретируется).
                         JsonNode idNode = properties.path("id");
                         require(!idNode.isMissingNode() && !idNode.isNull()
                                         && (idNode.isTextual() || idNode.isNumber())
                                         && !idNode.asText().isBlank(),
                                 "Нет id у Feature #" + (total + 1));
                         String id = idNode.asText();
-                        require(seenIds.add(id), "Повторяющийся id \"" + id + "\" у Feature #" + (total + 1));
+                        require(seenIds.add((idNode.isTextual() ? "s:" : "n:") + id), "Повторяющийся id \"" + id + "\" у Feature #" + (total + 1));
 
                         JsonNode type = properties.path("object_type");
                         require(type.isTextual() && !type.asText().isBlank(),
@@ -130,6 +143,16 @@ public class GeoJsonInspector {
                                     "Нет restriction_type у Feature #" + (total + 1));
                             restrictions.merge(restriction.asText(), 1L, Long::sum);
                         }
+                        // Каждая точка подключения — самостоятельная цель: расход обязателен (раздел 1.1).
+                        if ("oks_connection_point".equals(type.asText())) {
+                            JsonNode flow = properties.path("flow_tph");
+                            require(flow.isNumber() && flow.asDouble() >= 0,
+                                    "oks_connection_point \"" + id + "\" (Feature #" + (total + 1)
+                                            + "): flow_tph должен быть неотрицательным числом.");
+                            if (flow.asDouble() == 0) {
+                                zeroFlowPoints++;
+                            }
+                        }
                         // Форма и диапазон координат уже проверены GeoJsonGeometryValidator; здесь — соответствие типа геометрии типу объекта.
                         String geometryProblem = GeometryChecker.checkKind(type.asText(), geometry.path("type").asText());
                         if (geometryProblem != null) {
@@ -139,7 +162,7 @@ public class GeoJsonInspector {
                                         + geometryProblem + ".");
                             }
                         } else {
-                            // source, heat_network и heat_chamber уходят в построение графа сети, остальные типы билдер игнорирует.
+                            // source, heat_network и heat_chamber уходят в разбор существующей сети, остальные типы билдер игнорирует.
                             networkBuilder.add(feature, type.asText(), id, total + 1);
                         }
                         total++;
@@ -172,9 +195,41 @@ public class GeoJsonInspector {
         result.totalObjects = total;
         result.typeCounts = types;
         result.restrictionCounts = restrictions;
-        // Файл прочитан целиком — теперь можно проверить связи сети (ссылки, циклы, доступность источника).
+        // Файл прочитан целиком — теперь можно проверить существующую сеть (камеры, связность, диаметры).
         result.network = networkBuilder.build();
+        result.warnings = new ArrayList<>(inputWarnings(types, restrictions, zeroFlowPoints));
+        result.warnings.addAll(result.network.warnings);
         return result;
+    }
+
+    /** Замечания к составу данных: что в файле не входит в базовый состав и не будет использовано. */
+    private static List<String> inputWarnings(Map<String, Long> types, Map<String, Long> restrictions, long zeroFlowPoints) {
+        List<String> out = new ArrayList<>();
+        if (!types.containsKey("oks_connection_point")) {
+            out.add("В файле нет точек подключения ОКС (oks_connection_point): подключать нечего.");
+        }
+        for (Map.Entry<String, Long> e : types.entrySet()) {
+            if (BASE_TYPES.contains(e.getKey())) {
+                continue;
+            }
+            boolean building = "oks_existing".equals(e.getKey()) || "oks_future".equals(e.getKey());
+            out.add("Объекты типа " + e.getKey() + " (" + e.getValue() + " шт.) не входят в базовый состав и в расчёте не используются"
+                    + (building ? ": здания передаются как ограничения restriction с типом oks." : "."));
+        }
+        List<String> unsupported = new ArrayList<>();
+        for (Map.Entry<String, Long> e : restrictions.entrySet()) {
+            if (!SUPPORTED_RESTRICTIONS.contains(e.getKey())) {
+                unsupported.add(e.getKey() + " (" + e.getValue() + ")");
+            }
+        }
+        if (!unsupported.isEmpty()) {
+            out.add("Типы ограничений, которых нет в таблице 2 приложения (поддержка необязательна): "
+                    + String.join(", ", unsupported) + ".");
+        }
+        if (zeroFlowPoints > 0) {
+            out.add("У точек подключения нулевой расход (flow_tph = 0): " + zeroFlowPoints + " шт.");
+        }
+        return out;
     }
 
     /** « (строка N, столбец M)» для сообщения об ошибке JSON; пустая строка, если положение неизвестно. */
@@ -196,12 +251,8 @@ public class GeoJsonInspector {
         result.restrictionCounts.forEach((type, count) -> System.out.println("  " + type + ": " + count));
         ExistingNetworkBuilder.NetworkSummary net = result.network;
         System.out.println("\nСуществующая сеть:");
-        System.out.println("  источников: " + net.sources + ", участков: " + net.segments
-                + ", камер: " + net.chambers + ", максимальная глубина цепочки: " + net.maxDepth
-                + ", связи: " + net.linksMode);
-        net.objectsPerSource.forEach((source, count) ->
-                System.out.println("  от источника " + source + " питается объектов: " + count));
-        net.warnings.forEach(w -> System.out.println("  Предупреждение: " + w));
+        System.out.println("  источников: " + net.sources + ", участков: " + net.segments + ", камер: " + net.chambers);
+        result.warnings.forEach(w -> System.out.println("  Замечание: " + w));
     }
 
     /** Короткая проверка условия: если не выполнено — исключение с понятным сообщением. */

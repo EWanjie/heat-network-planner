@@ -13,7 +13,7 @@ final class GeometryChecker {
 
     /**
      * Описание проблемы (без точки в конце) или null, если тип геометрии подходит типу объекта.
-     * Ограничения (restriction) могут иметь любую геометрию, поэтому для них проверки нет.
+     * Ограничение (restriction) — линия, мультилиния, полигон или мультиполигон (раздел 1.1 приложения).
      */
     static String checkKind(String objectType, String geometryType) {
         switch (objectType) {
@@ -27,6 +27,10 @@ final class GeometryChecker {
             case "oks_existing":
                 return geometryType.equals("Polygon") || geometryType.equals("MultiPolygon")
                         ? null : mismatch(objectType, "Polygon или MultiPolygon", geometryType);
+            case "restriction":
+                return geometryType.equals("LineString") || geometryType.equals("MultiLineString")
+                        || geometryType.equals("Polygon") || geometryType.equals("MultiPolygon")
+                        ? null : mismatch(objectType, "LineString, MultiLineString, Polygon или MultiPolygon", geometryType);
             default:
                 return null;
         }
