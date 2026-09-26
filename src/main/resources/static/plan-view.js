@@ -13,6 +13,8 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
     let diagnostics = [];
     let error = "";
     let currentSolution = null;
+    let jobId = null;
+    let progressText = "";
     let selectedTarget = null;
     const built = new Map();
 
@@ -167,7 +169,8 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
             ? `ПРЕЖНЯЯ ВЕРСИЯ ${number - 2 * MAIN_TABS}` : additional
             ? `ДОПОЛНИТЕЛЬНЫЙ ВАРИАНТ ${number - MAIN_TABS}` : `РЕШЕНИЕ НОМЕР ${number}`));
         if (state === "loading") {
-            summaryElement.append(element("p", "plan-note", "Загружаем дороги и считаем варианты. Первый расчёт файла занимает около двух минут, повторный быстрее."));
+            summaryElement.append(element("p", "plan-note", progressText || "Загружаем дороги и ставим расчёт в очередь."));
+            summaryElement.append(element("p", "plan-note", "Первый расчёт файла занимает около трёх минут, повторный быстрее. Страницу можно не закрывать: расчёт идёт на сервере."));
             return;
         }
         if (state === "error") {
@@ -275,7 +278,22 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
             if (roads) body.append("roads", roads, "roads.geojson");
             const response = await fetch("/api/plan", {method: "POST", body});
             if (!response.ok) throw new Error(await response.text());
-            const result = await response.json();
+            jobId = (await response.json()).jobId;
+            let result = null;
+            while (!result) {
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                const poll = await fetch(`/api/plan/${jobId}`);
+                if (!poll.ok) throw new Error(await poll.text());
+                const status = await poll.json();
+                if (status.status === "FAILED") throw new Error(status.message);
+                if (status.status === "DONE") result = status.result;
+                else {
+                    progressText = status.status === "QUEUED"
+                        ? `В очереди: впереди заданий ${Math.max(0, status.queuePosition - 1)}.`
+                        : `${status.message} (${status.progress} %).`;
+                    if (currentSolution !== null) render(currentSolution);
+                }
+            }
             mainVariants = result.variants;
             extraVariants = result.additional || [];
             diagnostics = result.diagnostics || [];
@@ -301,7 +319,7 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
             button.disabled = true;
             try {
                 const extra = document.getElementById("additionalToggle").checked;
-                const response = await fetch(`/api/plan/export?additional=${extra}`);
+                const response = await fetch(`/api/plan/${jobId}/export?additional=${extra}`);
                 if (!response.ok) throw new Error(await response.text());
                 const url = URL.createObjectURL(await response.blob());
                 const link = document.createElement("a");
@@ -342,6 +360,10 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         }
         if (currentSolution !== null) render(currentSolution);
     }
+
+    // Расчёт занимает минуты, поэтому он стартует сразу после открытия страницы результатов, пока пользователь
+    // смотрит исходные данные; к моменту перехода на вкладку решения он уже идёт или закончен.
+    setTimeout(() => { if (state === "idle") load(); }, 800);
 
     return function sync(solutionNumber) {
         currentSolution = solutionNumber;

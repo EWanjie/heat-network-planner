@@ -22,6 +22,8 @@ public final class Variants {
         /** Допущения, на которых построен вариант (пусто — вариант строго по данным и правилам). */
         public final List<String> assumptions;
         final Router.Profile profile;
+        /** Валидатор нашёл нарушение правил: вариант показывается только если правильных нет. */
+        public final boolean invalid;
         /** Тот же вариант до перестройки цепочек (null, если перестройка ничего не изменила). */
         public Variant previous;
 
@@ -35,6 +37,11 @@ public final class Variants {
             this.violations = violations;
             this.assumptions = assumptionsOf(solution);
             this.profile = profile;
+            boolean bad = false;
+            for (PlanValidator.Violation x : violations) {
+                bad |= x.group == PlanValidator.Group.RULE;
+            }
+            this.invalid = bad;
         }
     }
 
@@ -108,6 +115,16 @@ public final class Variants {
         if (requireAssumptions) {
             all.removeIf(v -> v.assumptions.isEmpty());
         }
+        // Варианты с нарушением правил не показываются, если есть правильные; иначе лучший из них показывается с пометкой.
+        List<Variant> valid = new ArrayList<>();
+        for (Variant v : all) {
+            if (!v.invalid) {
+                valid.add(v);
+            }
+        }
+        if (!valid.isEmpty()) {
+            all = valid;
+        }
         all.sort(Comparator.comparingDouble(v -> v.solution.score()));
         List<Variant> chosen = new ArrayList<>();
         for (Variant v : all) {
@@ -168,11 +185,6 @@ public final class Variants {
                                  Router.Profile profile, String strategy) {
         JointPlanner.Solution s = planner.planBest(order, 3, profile);
         List<PlanValidator.Violation> v = PlanValidator.validateTree(in, exact, s.branches, s.evaluation);
-        for (PlanValidator.Violation x : v) {
-            if (x.group == PlanValidator.Group.RULE) {
-                return null;
-            }
-        }
         return new Variant(s, strategy, v, profile);
     }
     static double distanceToNetwork(PlanInput in, PlanInput.Target t) {

@@ -83,7 +83,7 @@ public class GeoJsonInspector {
         mapper.enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
         Map<String, Long> types = new TreeMap<>();
         Map<String, Long> restrictions = new TreeMap<>();
-        Set<String> seenIds = new HashSet<>();
+        IdSet seenIds = new IdSet();
         // Получает объекты существующей сети по ходу чтения; результат забираем в конце.
         ExistingNetworkBuilder networkBuilder = new ExistingNetworkBuilder();
         // Ошибки геометрии копим по всему файлу, чтобы показать их разом, а не по одной за загрузку.
@@ -261,4 +261,64 @@ public class GeoJsonInspector {
             throw new GeoJsonValidationException(message);
         }
     }
-}
+
+    /**
+     * Множество идентификаторов для проверки уникальности без хранения самих строк: хранятся 64-битные хэши в таблице с
+     * открытой адресацией (около 8 байт на объект, а не сотни байт на строку). Вероятность ложного «повтора» при 12 млн
+     * идентификаторов порядка 4·10^-6.
+     */
+    static final class IdSet {
+        private long[] table = new long[1 << 16];
+        private int size;
+
+        boolean add(String key) {
+            long h = hash(key);
+            if (h == 0) {
+                h = 1;
+            }
+            if ((size + 1) * 2 > table.length) {
+                grow();
+            }
+            int mask = table.length - 1;
+            int i = (int) (h ^ (h >>> 32)) & mask;
+            while (table[i] != 0) {
+                if (table[i] == h) {
+                    return false;
+                }
+                i = (i + 1) & mask;
+            }
+            table[i] = h;
+            size++;
+            return true;
+        }
+
+        private void grow() {
+            long[] old = table;
+            table = new long[old.length * 2];
+            int mask = table.length - 1;
+            for (long h : old) {
+                if (h != 0) {
+                    int i = (int) (h ^ (h >>> 32)) & mask;
+                    while (table[i] != 0) {
+                        i = (i + 1) & mask;
+                    }
+                    table[i] = h;
+                }
+            }
+        }
+
+        /** FNV-1a по символам с финальным перемешиванием (splitmix64). */
+        private static long hash(String s) {
+            long h = 0xcbf29ce484222325L;
+            for (int k = 0; k < s.length(); k++) {
+                h ^= s.charAt(k);
+                h *= 0x100000001b3L;
+            }
+            h ^= h >>> 30;
+            h *= 0xbf58476d1ce4e5b9L;
+            h ^= h >>> 27;
+            h *= 0x94d049bb133111ebL;
+            h ^= h >>> 31;
+            return h;
+        }
+    }}

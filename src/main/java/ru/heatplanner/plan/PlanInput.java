@@ -91,6 +91,15 @@ public final class PlanInput {
     private final GeometryFactory factory = new GeometryFactory();
     private final RuleSet rules;
     private final boolean assumeRoadWidth;
+    /** Проход чтения: 0 — всё сразу; 1 — всё, кроме ограничений; 2 — только ограничения из рабочей области. */
+    private int pass;
+    /** Рабочая область в градусах: вокруг сети и точек подключения плюс {@link #WORK_MARGIN_M}. */
+    private org.locationtech.jts.geom.Envelope area;
+    private int outsideArea;
+    /** Объекты рабочей области (уже отобранные), чтобы построить второй набор без повторного чтения файла. */
+    private java.util.List<JsonNode> kept;
+    /** Запас вокруг сети и точек, м: ограничения дальше не читаются (память не растёт с размером файла). */
+    static final double WORK_MARGIN_M = 600;
     private int roadsAssumed;
     private int roadsIgnored;
     private final Set<String> unsupported = new LinkedHashSet<>();
@@ -130,6 +139,15 @@ public final class PlanInput {
      */
     public static PlanInput read(Path file, Path roads, RuleSet rules, boolean assumeRoadWidth) throws IOException {
         PlanInput input = new PlanInput(rules, assumeRoadWidth);
+        input.kept = new ArrayList<>();
+        // Файл может быть очень большим: сеть и точки читаются первым проходом, ограничения — вторым и только те,
+        // что лежат рядом с ними, поэтому память определяется рабочей областью, а не размером файла.
+        input.pass = 1;
+        try (InputStream in = Files.newInputStream(file)) {
+            input.readFeatures(in);
+        }
+        input.area = input.workArea();
+        input.pass = 2;
         try (InputStream in = Files.newInputStream(file)) {
             input.readFeatures(in);
         }
@@ -167,9 +185,88 @@ public final class PlanInput {
         }
     }
 
+    /** Рабочая область в градусах: габарит сети, источников, камер и точек плюс запас; null, если объектов нет. */
+    private org.locationtech.jts.geom.Envelope workArea() {
+        org.locationtech.jts.geom.Envelope e = new org.locationtech.jts.geom.Envelope();
+        for (Source s : sources) {
+            e.expandToInclude(s.xy);
+        }
+        for (Chamber c : chambers) {
+            e.expandToInclude(c.xy);
+        }
+        for (Target t : targets) {
+            e.expandToInclude(t.xy);
+        }
+        for (Segment s : segments) {
+            e.expandToInclude(s.line.getEnvelopeInternal());
+        }
+        if (e.isNull()) {
+            return null;
+        }
+        e.expandBy(WORK_MARGIN_M);
+        double[] sw = Utm.inverse(e.getMinX(), e.getMinY());
+        double[] ne = Utm.inverse(e.getMaxX(), e.getMaxY());
+        double[] se = Utm.inverse(e.getMaxX(), e.getMinY());
+        double[] nw = Utm.inverse(e.getMinX(), e.getMaxY());
+        org.locationtech.jts.geom.Envelope deg = new org.locationtech.jts.geom.Envelope();
+        for (double[] p : new double[][]{sw, ne, se, nw}) {
+            deg.expandToInclude(p[0], p[1]);
+        }
+        return deg;
+    }
+
+    /** Габарит координат GeoJSON (долгота, широта) пересекает рабочую область. */
+    private static boolean touches(JsonNode coordinates, org.locationtech.jts.geom.Envelope area, double[] box) {
+        collect(coordinates, box);
+        return box[0] <= area.getMaxX() && box[2] >= area.getMinX() && box[1] <= area.getMaxY() && box[3] >= area.getMinY();
+    }
+
+    private static void collect(JsonNode node, double[] box) {
+        if (node.isArray() && node.size() >= 2 && node.get(0).isNumber()) {
+            double x = node.get(0).asDouble();
+            double y = node.get(1).asDouble();
+            box[0] = Math.min(box[0], x);
+            box[1] = Math.min(box[1], y);
+            box[2] = Math.max(box[2], x);
+            box[3] = Math.max(box[3], y);
+        } else if (node.isArray()) {
+            for (JsonNode child : node) {
+                collect(child, box);
+            }
+        }
+    }
+
+    /**
+     * Тот же набор объектов с другими правилами (например, с допущением о ширине дорог), без повторного чтения файла:
+     * повторно разбираются только объекты рабочей области, которые сохранены при чтении.
+     */
+    public PlanInput derive(RuleSet otherRules, boolean assumeRoadWidth) {
+        PlanInput other = new PlanInput(otherRules, assumeRoadWidth);
+        for (JsonNode f : kept) {
+            other.add(f);
+        }
+        other.outsideArea = outsideArea;
+        other.finish();
+        return other;
+    }
+
     private void add(JsonNode feature) {
         JsonNode props = feature.path("properties");
         JsonNode geometry = feature.path("geometry");
+        boolean restriction = "restriction".equals(props.path("object_type").asText());
+        if ((pass == 1 && restriction) || (pass == 2 && !restriction)) {
+            return;
+        }
+        if (restriction && area != null && pass == 2) {
+            double[] box = {Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
+            if (!touches(geometry.path("coordinates"), area, box)) {
+                outsideArea++;
+                return;
+            }
+        }
+        if (kept != null) {
+            kept.add(feature);
+        }
         Id id = Id.of(props.path("id"));
         switch (props.path("object_type").asText()) {
             case "source":
@@ -270,6 +367,10 @@ public final class PlanInput {
         if (roadsFromCenterline > 0) {
             diagnostics.add("Дорог, заданных осью и шириной: " + roadsFromCenterline
                     + ". Расчётная полоса — буфер на половину ширины, это модель, а не измеренная граница проезжей части.");
+        }
+        if (outsideArea > 0) {
+            diagnostics.add("Ограничений вне рабочей области (дальше " + (int) WORK_MARGIN_M + " м от сети и точек подключения) не загружено: "
+                    + outsideArea + ". Трассы строятся в пределах рабочей области.");
         }
         if (roadsIgnored > 0) {
             diagnostics.add("Дорог OpenStreetMap без ширины в расчёте нет: " + roadsIgnored + ". Основные варианты строятся строго по данным файла; "

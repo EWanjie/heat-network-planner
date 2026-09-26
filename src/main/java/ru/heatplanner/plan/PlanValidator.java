@@ -152,7 +152,7 @@ public final class PlanValidator {
                 continue;
             }
             double extent = o.rule.extent;
-            if (o.geometry.distance(F.createPoint(leg.from)) < extent - 0.05 || o.geometry.distance(F.createPoint(leg.to)) < extent - 0.05) {
+            if (!extentAlongLeg(o.geometry, line, extent)) {
                 out.add(new Violation(Group.RULE, "SPECIAL_EXTENT", id, "участок " + number + ": интервал прохода через " + o
                         + " короче требуемых " + round2(extent) + " м за границей"));
             }
@@ -167,6 +167,32 @@ public final class PlanValidator {
         if (Math.abs(leg.kSpec - k) > 1e-9) {
             out.add(new Violation(Group.RULE, "SPECIAL_K", id, "участок " + number + ": коэффициент " + leg.kSpec + ", по правилам " + k));
         }
+    }
+
+    /**
+     * Специальный интервал: от точки входа в полигон до начала участка и от точки выхода до его конца вдоль самого участка
+     * не меньше extent (для линейных объектов — расстояние до линии). Вдоль трассы, а не по кратчайшему расстоянию до
+     * полигона: при косом входе перпендикуляр короче, хотя интервал соблюдён.
+     */
+    private static boolean extentAlongLeg(Geometry o, LineString leg, double extent) {
+        double length = leg.getLength();
+        if (o.getDimension() != 2) {
+            return o.distance(F.createPoint(leg.getCoordinateN(0))) >= extent - 0.05
+                    && o.distance(F.createPoint(leg.getCoordinateN(1))) >= extent - 0.05;
+        }
+        Coordinate a = leg.getCoordinateN(0);
+        Geometry inside = o.intersection(leg);
+        double first = Double.MAX_VALUE;
+        double last = -Double.MAX_VALUE;
+        for (Coordinate c : inside.getCoordinates()) {
+            double d = a.distance(c);
+            first = Math.min(first, d);
+            last = Math.max(last, d);
+        }
+        if (first == Double.MAX_VALUE) {
+            return true;
+        }
+        return first >= extent - 0.05 && length - last >= extent - 0.05;
     }
 
     /** Наименьший острый угол между участком и границей полигона в точках пересечения, градусы. */
@@ -197,14 +223,7 @@ public final class PlanValidator {
     }
 
     private static List<Obstacle> ownPolygons(ObstacleSet obstacles, Coordinate cp) {
-        List<Obstacle> own = new ArrayList<>();
-        Point p = F.createPoint(cp);
-        for (Obstacle o : obstacles.all()) {
-            if ("oks".equals(o.rule.type) && o.geometry.getDimension() == 2 && o.geometry.covers(p)) {
-                own.add(o);
-            }
-        }
-        return own;
+        return Start.ownPolygons(obstacles, cp);
     }
 
     private static double turnDeg(Route.Leg a, Route.Leg b) {

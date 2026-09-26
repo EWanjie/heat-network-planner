@@ -51,6 +51,24 @@ public final class Start {
     }
 
     private static final GeometryFactory F = new GeometryFactory();
+    /**
+     * Точка на границе здания (или в пределах этого расстояния, м) принадлежит зданию: при переводе долготы и широты
+     * в метры прямая граница полигона и точка, лежащая на ней, расходятся на миллиметры.
+     */
+    static final double BOUNDARY_TOLERANCE_M = 0.05;
+
+    /** Полигоны ОКС, содержащие точку подключения (с допуском на границу). */
+    public static List<Obstacle> ownPolygons(ObstacleSet obstacles, Coordinate cp) {
+        Point p = F.createPoint(cp);
+        List<Obstacle> own = new ArrayList<>();
+        for (Obstacle o : obstacles.all()) {
+            if ("oks".equals(o.rule.type) && o.geometry.getDimension() == 2
+                    && (o.geometry.covers(p) || o.geometry.distance(p) <= BOUNDARY_TOLERANCE_M)) {
+                own.add(o);
+            }
+        }
+        return own;
+    }
     /** Сколько ближайших границ рассматривать, чтобы не подменять подход произвольным входом с дальней стороны. */
     private static final int MAX_APPROACHES = 3;
     /** Различными считаются подходы, направления которых отличаются не менее чем на столько градусов. */
@@ -116,12 +134,7 @@ public final class Start {
     public static List<Start> forTarget(PlanInput.Target target, ObstacleSet obstacles, int dn, RuleSet rules,
                                         List<Refusal> refusals) {
         Point cp = F.createPoint(target.xy);
-        Set<Obstacle> own = new HashSet<>();
-        for (Obstacle o : obstacles.all()) {
-            if ("oks".equals(o.rule.type) && o.geometry.getDimension() == 2 && o.geometry.covers(cp)) {
-                own.add(o);
-            }
-        }
+        Set<Obstacle> own = new HashSet<>(ownPolygons(obstacles, target.xy));
         List<Start> out = new ArrayList<>();
         if (own.isEmpty()) {
             Obstacle b = pointBlocker(target.xy, dn, obstacles, null);
@@ -158,7 +171,8 @@ public final class Start {
                 // Запасные подходы только для здания, к которому по правилу (к ближайшей границе) подойти нельзя.
                 break;
             }
-            double[] u = dist < 1e-6 ? outwardNormal(own, boundary) : Angles.unit(target.xy, boundary);
+            boolean onBoundary = dist <= BOUNDARY_TOLERANCE_M;
+            double[] u = onBoundary ? outwardNormal(own, boundary) : Angles.unit(target.xy, boundary);
             if (u == null) {
                 refuse(refusals, isNearest, Refusal.Code.NO_DIRECTION, null, dist);
                 continue;
@@ -245,22 +259,44 @@ public final class Start {
         return parts;
     }
 
-    /** Внешняя нормаль к границе в точке (для точки подключения, лежащей ровно на границе): наружу из полигонов. */
+    /**
+     * Внешняя нормаль к границе в точке (для точки подключения, лежащей на границе здания или в миллиметрах от неё):
+     * перпендикуляр к ближайшему отрезку границы, направленный из полигонов наружу.
+     */
     private static double[] outwardNormal(Set<Obstacle> own, Coordinate boundary) {
-        for (int deg = 0; deg < 360; deg += 15) {
-            double a = Math.toRadians(deg);
-            Coordinate probe = new Coordinate(boundary.x + 0.05 * Math.cos(a), boundary.y + 0.05 * Math.sin(a));
+        LineSegment nearest = null;
+        double best = Double.MAX_VALUE;
+        for (Obstacle o : own) {
+            for (Ring ring : boundaryParts(o.geometry)) {
+                Coordinate[] cs = ring.geometry.getCoordinates();
+                for (int i = 1; i < cs.length; i++) {
+                    LineSegment s = new LineSegment(cs[i - 1], cs[i]);
+                    double d = s.distance(boundary);
+                    if (d < best && s.getLength() > 1e-9) {
+                        best = d;
+                        nearest = s;
+                    }
+                }
+            }
+        }
+        if (nearest == null) {
+            return null;
+        }
+        double len = nearest.getLength();
+        double nx = -(nearest.p1.y - nearest.p0.y) / len;
+        double ny = (nearest.p1.x - nearest.p0.x) / len;
+        for (int sign : new int[]{1, -1}) {
+            Coordinate probe = new Coordinate(boundary.x + sign * nx * 0.5, boundary.y + sign * ny * 0.5);
             boolean inside = false;
             for (Obstacle o : own) {
                 inside |= o.geometry.covers(F.createPoint(probe));
             }
             if (!inside) {
-                return new double[]{Math.cos(a), Math.sin(a)};
+                return new double[]{sign * nx, sign * ny};
             }
         }
         return null;
     }
-
     /**
      * Точка на луче от границы наружу, где ось выходит из зоны отступа собственного полигона (чуть за ней).
      * Зона считается для ДУ dn по тем же правилам, что и при проверках; вычислительный запас уже в ней.

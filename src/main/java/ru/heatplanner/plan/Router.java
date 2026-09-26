@@ -73,6 +73,13 @@ public final class Router {
     /** Предел числа меток одного поиска: детерминированный предел работы (не зависит от загрузки машины). */
     /** Успешные поиски на данных ЗИЛ укладывались в тысячу меток; неудачные без предела перебирают всё пространство. */
     private static final int MAX_LABELS = 6_000;
+    /**
+     * Штраф за поворот в целевой функции поиска, м трубы: разница между двумя трассами равной длины решается в пользу
+     * той, где меньше изломов (критерий приложения — количество поворотов, отсутствие мелкой ломаной). Реальная длина и
+     * стоимость не меняются. Поворотом считается излом более чем на TURN_FREE_DEG градусов.
+     */
+    static final double TURN_PENALTY_M = 6;
+    static final double TURN_FREE_DEG = 5;
     /** Для запасных подходов (здание, к которому строго по правилу не подойти) предел шире: пути там длиннее и таких целей единицы. */
     private static final int MAX_LABELS_FALLBACK = 40_000;
     /** Предел времени одного поиска, с: тяжёлые случаи (много специальных проходов) не должны задерживать весь расчёт. */
@@ -476,6 +483,7 @@ public final class Router {
 
         /** Косинус наибольшего поворота: сравнение скалярного произведения дешевле, чем acos на каждом ребре. */
         final double cosMaxTurn = Math.cos(Math.toRadians(maxTurnDeg + 1e-9));
+        final double cosFreeTurn = Math.cos(Math.toRadians(TURN_FREE_DEG));
 
         boolean turnOk(double[] in, double[] out) {
             return in == null || in[0] * out[0] + in[1] * out[1] >= cosMaxTurn;
@@ -520,7 +528,10 @@ public final class Router {
             }
             double cost = l.cost + d * price;
             double len = l.length + d;
-            push(new Label(idx, w, dir, len, cost, weight(profile, len, cost), l,
+            // Целевая функция линейна по длине и стоимости, поэтому приращение считается отдельно и к нему добавляется штраф.
+            double turnCost = l.dir != null && l.dir[0] * dir[0] + l.dir[1] * dir[1] < cosFreeTurn ? TURN_PENALTY_M * perMeter() : 0;
+            double obj = l.obj + weight(profile, d, d * price) + turnCost;
+            push(new Label(idx, w, dir, len, cost, obj, l,
                     List.of(new Route.Leg(p, w, false, 1, List.of(), false, false))), nearestGoalDistance(w));
         }
 

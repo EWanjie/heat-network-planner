@@ -109,4 +109,18 @@ class PlanValidatorTest {
         Route c = route("c", 10, DN, leg(c(0, 40), c(0, 50)), leg(c(0, 50), c(100, 50)));
         assertEquals(0, codes(List.of(), a, c).size());
     }
+    /** Косой переход: 3 м отмеряются вдоль трассы от границы дороги, поэтому расстояние до полигона по перпендикуляру может быть меньше 3 м. */
+    @Test
+    void obliqueCrossingMeasuresTheExtentAlongTheLeg() {
+        Obstacle road = obstacle(0, "road", rect(0, -5, 100, 5));
+        double s60 = Math.sin(Math.toRadians(60));
+        double c60 = Math.cos(Math.toRadians(60));
+        Coordinate entry = c(50, -5);
+        Coordinate exit = c(50 + 10 / s60 * c60, 5);
+        Coordinate from = c(entry.x - 3 * c60, entry.y - 3 * s60);
+        Coordinate to = c(exit.x + 3 * c60, exit.y + 3 * s60);
+        Route.Leg special = new Route.Leg(from, to, true, 1.60, List.of(road), false, false);
+        assertTrue(codes(List.of(road), route("a", 10, DN, special)).isEmpty(),
+                codes(List.of(road), route("a", 10, DN, special)).toString());
+    }
 }

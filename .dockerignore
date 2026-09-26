@@ -1,0 +1,7 @@
+target/
+data/
+.git/
+.idea/
+*.iml
+test-data/
+scripts/
