@@ -143,7 +143,7 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         const variant = variantOf(number);
         if (!variant) {
             summaryElement.append(element("p", "plan-note", additional
-                ? "Вариантов с допущениями, дающих лучший или иной результат, для этого набора данных не найдено."
+                ? `Для решения ${number - MAIN_TABS} допущения не понадобились: дополнительного варианта с той же логикой нет.`
                 : "Существенно отличающегося варианта для этого набора данных не найдено: остальные стратегии дали почти ту же сеть."));
             return;
         }
@@ -210,27 +210,12 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         }
     }
 
-    // Дороги OpenStreetMap берутся из уже загруженного в браузере набора; без них расчёт идёт по дорогам из файла.
-    async function roadsBlob() {
-        const dataset = window.workingDataset;
-        if (!dataset) return null;
-        try {
-            const snapshot = await dataset.load();
-            if (snapshot.status !== "ready") return null;
-            return new Blob([JSON.stringify(dataset.getRoads())], {type: "application/geo+json"});
-        } catch (e) {
-            return null;
-        }
-    }
-
     async function load() {
         state = "loading";
         show();
         try {
             const body = new FormData();
             body.append("file", file);
-            const roads = await roadsBlob();
-            if (roads) body.append("roads", roads, "roads.geojson");
             const response = await fetch("/api/plan", {method: "POST", body});
             if (!response.ok) throw new Error(await response.text());
             jobId = (await response.json()).jobId;
@@ -253,7 +238,7 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
             extraVariants = result.additional || [];
             diagnostics = result.diagnostics || [];
             mainVariants.forEach((v, i) => build(`v${i}`, v));
-            extraVariants.forEach((v, i) => build(`a${i}`, v));
+            extraVariants.forEach((v, i) => { if (v) build(`a${i}`, v); });
             state = "ready";
             enableExport();
         } catch (e) {

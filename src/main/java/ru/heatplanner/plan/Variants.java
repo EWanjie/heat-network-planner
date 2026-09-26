@@ -26,6 +26,8 @@ public final class Variants {
         public final boolean invalid;
         /** Тот же вариант до перестройки цепочек (null, если перестройка ничего не изменила). */
         public Variant previous;
+        /** Номер стратегии (порядок добавления целей и показатель): по нему дополнительный вариант ставится к решению. */
+        public int key = -1;
 
         Variant(JointPlanner.Solution solution, String strategy, List<PlanValidator.Violation> violations) {
             this(solution, strategy, violations, Router.Profile.BALANCED);
@@ -73,9 +75,11 @@ public final class Variants {
         return out;
     }
 
-    /** requireAssumptions — оставлять только варианты, построенные с допущениями (дополнительные варианты). */
-    public static List<Variant> generate(PlanInput in, ObstacleSet exact, JointPlanner planner, int maxVariants,
-                                         boolean requireAssumptions) {
+    /**
+     * Все стратегии без отбора и перестройки цепочек. Стратегии считаются одновременно: у них общие графы видимости,
+     * а поиск внутри каждой тоже параллельный. Номер стратегии — в {@link Variant#key}.
+     */
+    public static List<Variant> buildAll(PlanInput in, ObstacleSet exact, JointPlanner planner) {
         List<PlanInput.Target> nearest = new ArrayList<>(in.targets);
         nearest.sort(Comparator.comparingDouble(t -> distanceToNetwork(in, t)));
         List<PlanInput.Target> farthest = new ArrayList<>(nearest);
@@ -83,21 +87,23 @@ public final class Variants {
         List<PlanInput.Target> byFlow = new ArrayList<>(in.targets);
         byFlow.sort(Comparator.comparingDouble((PlanInput.Target t) -> -t.flow));
 
-        // Стратегии считаются одновременно: у них общие графы видимости, а поиск внутри каждой тоже параллельный.
         List<Object[]> configs = new ArrayList<>();
         configs.add(new Object[]{nearest, Router.Profile.BALANCED, "Сначала ближние к сети точки, баланс стоимости и длины"});
         configs.add(new Object[]{farthest, Router.Profile.BALANCED, "Сначала дальние от сети точки, баланс стоимости и длины"});
-        if (!requireAssumptions) {
-            // Основной набор шире: разные порядок и показатель дают существенно разные сети. Дополнительный — две стратегии.
-            configs.add(new Object[]{nearest, Router.Profile.COMPACT, "Сначала ближние точки, наименьшая длина новой сети"});
-            configs.add(new Object[]{byFlow, Router.Profile.BALANCED, "Сначала точки с наибольшим расходом"});
-        }
+        configs.add(new Object[]{nearest, Router.Profile.COMPACT, "Сначала ближние точки, наименьшая длина новой сети"});
+        configs.add(new Object[]{byFlow, Router.Profile.BALANCED, "Сначала точки с наибольшим расходом"});
         java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(configs.size());
         List<java.util.concurrent.Future<Variant>> futures = new ArrayList<>();
-        for (Object[] c : configs) {
+        for (int k = 0; k < configs.size(); k++) {
+            Object[] c = configs.get(k);
+            int key = k;
             @SuppressWarnings("unchecked")
             List<PlanInput.Target> order = (List<PlanInput.Target>) c[0];
-            futures.add(pool.submit(() -> build(in, exact, planner, order, (Router.Profile) c[1], (String) c[2])));
+            futures.add(pool.submit(() -> {
+                Variant v = build(in, exact, planner, order, (Router.Profile) c[1], (String) c[2]);
+                v.key = key;
+                return v;
+            }));
         }
         List<Variant> all = new ArrayList<>();
         try {
@@ -112,9 +118,32 @@ public final class Variants {
         } finally {
             pool.shutdown();
         }
-        if (requireAssumptions) {
-            all.removeIf(v -> v.assumptions.isEmpty());
+        return all;
+    }
+
+    /** Перестройка цепочек одного варианта; если она не улучшает результат или ломает правила — вариант как был. */
+    public static Variant polish(PlanInput in, ObstacleSet exact, JointPlanner planner, Variant c) {
+        Router.Profile profile = profileOf(c);
+        JointPlanner.Solution s = planner.improve(planner.rebuildChains(planner.improve(c.solution, profile, 2), profile), profile, 2);
+        if (s.score() >= c.solution.score() - 1e-9) {
+            return c;
         }
+        List<PlanValidator.Violation> v = PlanValidator.validateTree(in, exact, s.branches, s.evaluation);
+        for (PlanValidator.Violation x : v) {
+            if (x.group == PlanValidator.Group.RULE) {
+                return c;
+            }
+        }
+        Variant improved = new Variant(s, c.strategy, v, c.profile);
+        improved.previous = c;
+        improved.key = c.key;
+        return improved;
+    }
+
+    /** Основные варианты: непохожие друг на друга, лучшие по показателю S. */
+    public static List<Variant> generate(PlanInput in, ObstacleSet exact, JointPlanner planner, int maxVariants,
+                                         boolean unused) {
+        List<Variant> all = buildAll(in, exact, planner);
         // Варианты с нарушением правил не показываются, если есть правильные; иначе лучший из них показывается с пометкой.
         List<Variant> valid = new ArrayList<>();
         for (Variant v : all) {
@@ -147,22 +176,7 @@ public final class Variants {
         java.util.concurrent.ExecutorService polishPool = java.util.concurrent.Executors.newFixedThreadPool(Math.max(1, chosen.size()));
         try {
             for (Variant c : chosen) {
-                polished.add(polishPool.submit(() -> {
-                    Router.Profile profile = profileOf(c);
-                    JointPlanner.Solution s = planner.improve(planner.rebuildChains(planner.improve(c.solution, profile, 2), profile), profile, 2);
-                    if (s.score() >= c.solution.score() - 1e-9) {
-                        return c;
-                    }
-                    List<PlanValidator.Violation> v = PlanValidator.validateTree(in, exact, s.branches, s.evaluation);
-                    for (PlanValidator.Violation x : v) {
-                        if (x.group == PlanValidator.Group.RULE) {
-                            return c;
-                        }
-                    }
-                    Variant improved = new Variant(s, c.strategy, v, c.profile);
-                    improved.previous = c;
-                    return improved;
-                }));
+                polished.add(polishPool.submit(() -> polish(in, exact, planner, c)));
             }
             List<Variant> result = new ArrayList<>();
             for (java.util.concurrent.Future<Variant> f : polished) {

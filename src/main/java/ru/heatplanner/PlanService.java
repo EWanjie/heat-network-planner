@@ -86,10 +86,22 @@ public class PlanService {
         CompletableFuture<List<Variants.Variant>> mainFuture = CompletableFuture.supplyAsync(
                 () -> Variants.generate(m.input, m.obstacles, m.planner, 3, false));
         CompletableFuture<List<Variants.Variant>> extraFuture = CompletableFuture.supplyAsync(
-                () -> Variants.generate(e.input, e.obstacles, e.planner, 3, true));
+                () -> Variants.buildAll(e.input, e.obstacles, e.planner));
         List<Variants.Variant> mainVariants = mainFuture.join();
         progress.accept(80, "Основные варианты готовы, идёт расчёт дополнительных");
-        List<Variants.Variant> additional = extraFuture.join();
+        List<Variants.Variant> extraAll = extraFuture.join();
+        // Дополнительный вариант N строится той же стратегией, что и решение N, но с допущениями; null — допущения не понадобились.
+        List<CompletableFuture<Variants.Variant>> pending = new ArrayList<>();
+        for (Variants.Variant v : mainVariants) {
+            Variants.Variant match = extraAll.stream().filter(x -> x.key == v.key && !x.invalid && !x.assumptions.isEmpty())
+                    .findFirst().orElse(null);
+            pending.add(match == null ? CompletableFuture.completedFuture(null)
+                    : CompletableFuture.supplyAsync(() -> Variants.polish(e.input, e.obstacles, e.planner, match)));
+        }
+        List<Variants.Variant> additional = new ArrayList<>();
+        for (CompletableFuture<Variants.Variant> f : pending) {
+            additional.add(f.join());
+        }
         progress.accept(95, "Формирование результата");
 
         List<Object> described = new ArrayList<>();
@@ -100,20 +112,22 @@ public class PlanService {
         List<Object> extra = new ArrayList<>();
         rank = 1;
         for (Variants.Variant v : additional) {
-            extra.add(describe(v, "a" + rank, rank++));
+            extra.add(v == null ? null : describe(v, "a" + rank, rank));
+            rank++;
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("variants", described);
         body.put("additional", extra);
         List<String> diagnostics = new ArrayList<>(main.input.diagnostics);
-        diagnostics.add(roads == null ? "Дороги OpenStreetMap не переданы: расчёт только по дорогам из файла."
-                : "Дороги OpenStreetMap учтены в расчёте.");
+        if (roads != null) {
+            diagnostics.add("Дороги OpenStreetMap учтены в расчёте.");
+        }
         body.put("diagnostics", diagnostics);
         body.put("seconds", (System.currentTimeMillis() - started) / 1000.0);
         try {
             return new PlanResult(mapper.writeValueAsString(body),
                     mapper.writeValueAsString(OutputBuilder.build(mainVariants, new ArrayList<>())),
-                    mapper.writeValueAsString(OutputBuilder.build(mainVariants, additional)));
+                    mapper.writeValueAsString(OutputBuilder.build(mainVariants, additional.stream().filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toList()))));
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException(ex);
         }

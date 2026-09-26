@@ -238,7 +238,6 @@ function renderMap(geojson, workingDataset) {
         map.addLayer(layer);
         legendRow(key, labelFor(key), color, layer);
     }
-    syncRoadDemo = mountRoadDemo(map, workingDataset, legendItems, () => currentResultTab === "input");
     syncSolution = mountPlan(map, window.uploadedFile, legendItems, document.getElementById("solutionSummary"));
     legendRow("map", "Карта", "#737373", base);
     const popupElement = document.createElement("div");

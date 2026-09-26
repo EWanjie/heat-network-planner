@@ -9,7 +9,7 @@ window.mountRoadDemo = function (map, store, legendItems, isInputTab) {
     const row = document.createElement("label");
     row.className = "legend-row"; row.dataset.layer = "osm-roads-demo";
     const check = document.createElement("input");
-    check.type = "checkbox"; check.checked = true; check.disabled = true;
+    check.type = "checkbox"; check.checked = false; check.disabled = true;
     check.setAttribute("aria-label", "Дороги OSM (демо)");
     const swatch = document.createElement("span"); swatch.className = "swatch"; swatch.style.background = "#ffffff";
     const title = document.createElement("span"); title.textContent = "Дороги OSM (демо)";
