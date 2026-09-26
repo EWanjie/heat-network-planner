@@ -145,4 +145,30 @@ class OutputTest {
         assertEquals(1, special);
         assertEquals(2, base);
     }
+    @Test
+    void branchesEndingInOneChamberReferenceTheSameNode() {
+        Branch a = branch(Id.number(1), 20, -1, 0, null, c(50, 40), c(50, 0));
+        Branch b = branch(Id.number(2), 20, 0, 20, null, c(80, 40), c(80, 20), c(50, 20));
+        Branch d = branch(Id.number(3), 20, 0, 20, null, c(20, 40), c(20, 20), c(50, 20));
+        Map<String, Object> fc = build(List.of(a, b, d));
+        int chambers = 0;
+        Object endOfB = null;
+        Object endOfC = null;
+        for (Object f : features(fc)) {
+            Map<String, Object> p = props(f);
+            if ("heat_chamber".equals(p.get("object_type"))) {
+                chambers++;
+            }
+            if ("heat_network".equals(p.get("object_type"))) {
+                if (Long.valueOf(2).equals(p.get("start_node_id"))) {
+                    endOfB = p.get("end_node_id");
+                }
+                if (Long.valueOf(3).equals(p.get("start_node_id"))) {
+                    endOfC = p.get("end_node_id");
+                }
+            }
+        }
+        assertEquals(2, chambers);
+        assertTrue(endOfB != null && endOfB.equals(endOfC), "обе ветви заканчиваются в одной камере: " + endOfB + " / " + endOfC);
+    }
 }

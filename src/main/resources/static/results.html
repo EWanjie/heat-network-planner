@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Моделирование трасс подключения к тепловым сетям</title>
-    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260925-plan7">
-    <link rel="stylesheet" href="/app.css?v=20260925-plan7">
-    <script src="/lib/openlayers/ol.js?v=20260925-plan7" defer></script>
-    <script src="/dataset-store.js?v=20260925-plan7" defer></script>
-    <script src="/schematic-basemap.js?v=20260925-plan7" defer></script>
-    <script src="/road-enrichment.js?v=20260925-plan7" defer></script>
-    <script src="/road-demo.js?v=20260925-plan7" defer></script>
-    <script src="/plan-view.js?v=20260925-plan7" defer></script>
-    <script src="/results.js?v=20260925-plan7" defer></script>
+    <link rel="stylesheet" href="/lib/openlayers/ol.css?v=20260926-plan9">
+    <link rel="stylesheet" href="/app.css?v=20260926-plan9">
+    <script src="/lib/openlayers/ol.js?v=20260926-plan9" defer></script>
+    <script src="/dataset-store.js?v=20260926-plan9" defer></script>
+    <script src="/schematic-basemap.js?v=20260926-plan9" defer></script>
+    <script src="/road-enrichment.js?v=20260926-plan9" defer></script>
+    <script src="/road-demo.js?v=20260926-plan9" defer></script>
+    <script src="/plan-view.js?v=20260926-plan9" defer></script>
+    <script src="/results.js?v=20260926-plan9" defer></script>
 </head>
 <body class="results-page">
 <header class="topbar">
@@ -25,6 +25,12 @@
 <div id="resultsToolbar" class="results-toolbar" hidden>
     <nav id="resultTabs" class="result-tabs" role="tablist" aria-label="Исходные данные и решения" hidden></nav>
     <div class="export-slot">
+        <label id="previousToggleLabel" class="additional-toggle" hidden title="Структура сети до перестройки цепочек: для сравнения с итоговым решением">
+            <input type="checkbox" id="previousToggle"> Прежние версии
+        </label>
+        <label id="additionalToggleLabel" class="additional-toggle" hidden title="Варианты, построенные с допущениями: ширина дорог по классу OSM, запасной подход к зданию">
+            <input type="checkbox" id="additionalToggle"> Дополнительные варианты
+        </label>
         <button id="exportButton" type="button" disabled hidden title="Выгрузка станет доступна после реализации расчёта">Выгрузить данные</button>
     </div>
 </div>

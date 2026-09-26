@@ -336,6 +336,19 @@ public final class PlanValidator {
                 }
             }
         }
+        // В узле новой сети проходящий ствол даёт два примыкания, значит ветвей в нём не более двух.
+        for (int i = 0; i < n; i++) {
+            int inNode = 1;
+            for (int j = i + 1; j < n; j++) {
+                if (bs.get(j).parent == bs.get(i).parent && bs.get(i).parent >= 0 && bs.get(i).attach.distance(bs.get(j).attach) < 0.05) {
+                    inNode++;
+                }
+            }
+            if (inNode > 2) {
+                out.add(new Violation(Group.RULE, "CHAMBER_FULL", String.valueOf(bs.get(i).target.id.value()),
+                        "в узле больше четырёх примыкающих участков"));
+            }
+        }
         // Диаметры не убывают к сети и не превышают предельную длину непрерывной части.
         for (int b = 0; b < n; b++) {
             List<TreeEvaluator.Piece> path = new ArrayList<>(pieces.get(b));
@@ -383,6 +396,10 @@ public final class PlanValidator {
                 }
                 boolean joinPoint = bs.get(j).parent == i && common.getLength() < 0.05 && common.getNumPoints() >= 1
                         && allNear(common, bs.get(j).attach);
+                // Две ветви, заканчивающиеся в одном узле общего ствола, касаются друг друга только в этой точке.
+                boolean sameNode = bs.get(i).parent >= 0 && bs.get(i).parent == bs.get(j).parent && common.getLength() < 0.05
+                        && bs.get(i).attach.distance(bs.get(j).attach) < 0.05 && allNear(common, bs.get(j).attach);
+                joinPoint |= sameNode;
                 if (!joinPoint) {
                     String a = String.valueOf(bs.get(i).target.id.value());
                     String c = String.valueOf(bs.get(j).target.id.value());

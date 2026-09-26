@@ -58,6 +58,10 @@ public final class Router {
     public static final class Result {
         public final Route route;
         public final String status;
+        /** Поиск отбрасывал пути из-за предельной длины: с большим диаметром (и большей длиной) маршрут мог бы найтись. */
+        public boolean lengthLimited;
+        /** Число меток, обработанных поиском (мера объёма работы). */
+        public int labels;
 
         Result(Route route, String status) {
             this.route = route;
@@ -66,12 +70,23 @@ public final class Router {
     }
 
     private static final int STATIC_BUFFER_QUADRANTS = 4;
-    private static final int MAX_LABELS = 300_000;
+    /** Предел числа меток одного поиска: детерминированный предел работы (не зависит от загрузки машины). */
+    /** Успешные поиски на данных ЗИЛ укладывались в тысячу меток; неудачные без предела перебирают всё пространство. */
+    private static final int MAX_LABELS = 6_000;
+    /** Для запасных подходов (здание, к которому строго по правилу не подойти) предел шире: пути там длиннее и таких целей единицы. */
+    private static final int MAX_LABELS_FALLBACK = 40_000;
+    /** Предел времени одного поиска, с: тяжёлые случаи (много специальных проходов) не должны задерживать весь расчёт. */
+    static final double SEARCH_TIME_LIMIT_S = 20;
+    /** Общий предел времени одного findRoute по всем коридорам, с. */
+    static final double FIND_TIME_LIMIT_S = 40;
     private static final int MAX_GOAL_EDGES = 30;
     private static final double CROSSING_RAY_M = 600;
-    private static final double CROSSING_RADIUS_M = 400;
+    private static final double CROSSING_RADIUS_M = 120;
+    /** Не более стольких направлений на вершины и на цели для одной точки: остальные добавят соседние вершины. */
+    private static final int MAX_VERTEX_DIRECTIONS = 6;
+    private static final int MAX_GOAL_DIRECTIONS = 3;
     /** Коридор поиска: сумма расстояний от вершины до старта и до цели не больше k·прямое + запас. */
-    private static final double[] CORRIDOR_FACTORS = {1.6, 3.0, Double.POSITIVE_INFINITY};
+    private static final double[] CORRIDOR_FACTORS = {1.6, 3.0};
     private static final double CORRIDOR_SLACK_M = 120;
     /**
      * Допуск упрощения колец вершин, м. Хорда между оставшимися вершинами уходит внутрь кольца не более чем на этот допуск,
@@ -122,17 +137,40 @@ public final class Router {
             direct = Math.min(direct, start.origin.distance(g.xy));
         }
         String status = "NO_ROUTE_ON_GRAPH";
+        boolean limited = false;
+        long began = System.nanoTime();
+        Route found = null;
+        int totalLabels = 0;
         for (double factor : CORRIDOR_FACTORS) {
+            if ((System.nanoTime() - began) / 1e9 > FIND_TIME_LIMIT_S) {
+                break;
+            }
             double limit = factor * direct + CORRIDOR_SLACK_M;
             Search search = new Search(start, goals, dn, profile, lengthBudget, limit, barrier);
             Route route = search.run();
             status = search.status;
+            limited |= search.budgetPruned;
+            totalLabels += search.labels;
             // Найденный путь короче границы коридора: он оптимален и по вершинам вне коридора.
-            if (route != null && (route.length <= limit || Double.isInfinite(factor))) {
-                return new Result(route, "OK");
+            if (route != null && route.length <= limit) {
+                Result ok = new Result(route, "OK");
+                ok.labels = totalLabels;
+                return ok;
+            }
+            if (route != null && (found == null || route.cost < found.cost)) {
+                found = route;
             }
         }
-        return new Result(null, status);
+        if (found != null) {
+            // Путь длиннее границы последнего коридора: он допустим, хотя обход вне коридора мог быть короче.
+            Result ok = new Result(found, "OK");
+            ok.labels = totalLabels;
+            return ok;
+        }
+        Result failed = new Result(null, status);
+        failed.lengthLimited = limited;
+        failed.labels = totalLabels;
+        return failed;
     }
 
     // ---- Вес и эвристика ---------------------------------------------------------------------------------------------
@@ -164,7 +202,7 @@ public final class Router {
                 BufferParameters.JOIN_ROUND, 5.0);
         for (Obstacle o : obstacles.all()) {
             // Запас над зоной покрывает срез дуги хордами и упрощение кольца, поэтому рёбра вдоль колец остаются допустимыми.
-            double axis = o.axisDistance(dn);
+            double axis = o.axisDistance(obstacles.zoneDn(dn));
             double d = axis + rules.geometryEps + axis * (1 - cosHalf) + RING_SIMPLIFY_M + 0.05;
             Geometry buffer = DouglasPeuckerSimplifier.simplify(BufferOp.bufferOp(o.geometry, d, params), RING_SIMPLIFY_M);
             for (int i = 0; i < buffer.getNumGeometries(); i++) {
@@ -203,6 +241,31 @@ public final class Router {
         }
     }
 
+        /** Геометрия специального прохода из точки по направлению (не зависит от пути, приведшего в точку). */
+    private static final class Crossing {
+        final Coordinate p1;
+        final Coordinate p2;
+        final double first;
+        final double end;
+        final double[] dir;
+        final List<Obstacle> members;
+        final double kMax;
+
+        Crossing(Coordinate p1, Coordinate p2, double first, double end, double[] dir, List<Obstacle> members, double kMax) {
+            this.p1 = p1;
+            this.p2 = p2;
+            this.first = first;
+            this.end = end;
+            this.dir = dir;
+            this.members = members;
+            this.kMax = kMax;
+        }
+    }
+
+    private static final Object NO_CROSSING = new Object();
+    /** Готовые специальные проходы: точка, ДУ и направление однозначно задают результат, поэтому он общий для всех поисков. */
+    private final Map<String, Object> crossingMemo = new ConcurrentHashMap<>();
+
     /**
      * Видимость между вершинами для ДУ dn: для каждой вершины список видимых вершин, считается один раз при первом
      * обращении и переиспользуется всеми целями. Обычные участки не пользуются исключениями (отступ до собственного
@@ -237,7 +300,7 @@ public final class Router {
     }
 
     private Visibility visibility(int dn) {
-        return visibilityCache.computeIfAbsent(dn, Visibility::new);
+        return visibilityCache.computeIfAbsent(obstacles.zoneDn(dn), Visibility::new);
     }
 
     // ---- Один поиск --------------------------------------------------------------------------------------------------
@@ -289,6 +352,7 @@ public final class Router {
         final PriorityQueue<Label> open = new PriorityQueue<>(Comparator.comparingDouble((Label l) -> l.f));
         String status = "NO_ROUTE_ON_GRAPH";
         int labels;
+        boolean budgetPruned;
 
         final Geometry barrierGeometry;
         final org.locationtech.jts.geom.prep.PreparedGeometry barrier;
@@ -368,7 +432,12 @@ public final class Router {
             Label first = new Label(startVertex, start.origin, start.direction, startLength, startCost,
                     weight(profile, startLength, startCost), null, Collections.emptyList());
             push(first, nearestGoalDistance(start.origin));
+            long deadline = System.nanoTime() + (long) (SEARCH_TIME_LIMIT_S * 1e9);
             while (!open.isEmpty()) {
+                if (System.nanoTime() > deadline) {
+                    status = "TIME_LIMIT";
+                    return null;
+                }
                 Label l = open.poll();
                 if (l.dead) {
                     continue;
@@ -377,7 +446,7 @@ public final class Router {
                     status = "OK";
                     return build(l, goals.get(l.v - goalBase));
                 }
-                if (++labels > MAX_LABELS) {
+                if (++labels > (start.nearestBoundary ? MAX_LABELS : MAX_LABELS_FALLBACK)) {
                     status = "SEARCH_BUDGET_EXHAUSTED";
                     return null;
                 }
@@ -405,8 +474,11 @@ public final class Router {
             open.add(l);
         }
 
+        /** Косинус наибольшего поворота: сравнение скалярного произведения дешевле, чем acos на каждом ребре. */
+        final double cosMaxTurn = Math.cos(Math.toRadians(maxTurnDeg + 1e-9));
+
         boolean turnOk(double[] in, double[] out) {
-            return in == null || Angles.turnDeg(in, out) <= maxTurnDeg + 1e-9;
+            return in == null || in[0] * out[0] + in[1] * out[1] >= cosMaxTurn;
         }
 
         void expand(Label l) {
@@ -435,7 +507,11 @@ public final class Router {
         void step(Label l, Coordinate p, int idx, boolean check) {
             Coordinate w = statics[idx];
             double d = p.distance(w);
-            if (d < 1e-6 || l.length + d > budget || idx == l.v) {
+            if (d < 1e-6 || idx == l.v) {
+                return;
+            }
+            if (l.length + d > budget) {
+                budgetPruned = true;
                 return;
             }
             double[] dir = Angles.unit(p, w);
@@ -470,7 +546,7 @@ public final class Router {
                     // Подход не вдоль существующей линии: сначала к точке у отступа по нормали, затем прямо к врезке.
                     double reach = 0;
                     for (Obstacle o : g.exempt) {
-                        reach = Math.max(reach, o.axisDistance(dn));
+                        reach = Math.max(reach, o.axisDistance(obstacles.zoneDn(dn)));
                     }
                     double[] normal = {-g.lineDirection[1], g.lineDirection[0]};
                     for (int side : new int[]{1, -1}) {
@@ -496,7 +572,11 @@ public final class Router {
         void finalApproach(Label l, Coordinate from, int gi, Goal g, Coordinate labelPoint, List<Route.Leg> before) {
             double d = from.distance(g.xy);
             double extra = before.isEmpty() ? 0 : labelPoint.distance(from);
-            if (d < 1e-6 || l.length + extra + d > budget) {
+            if (d < 1e-6) {
+                return;
+            }
+            if (l.length + extra + d > budget) {
+                budgetPruned = true;
                 return;
             }
             double[] dir = Angles.unit(from, g.xy);
@@ -522,7 +602,39 @@ public final class Router {
 
         // -- специальные проходы через дороги и трамвайные пути
 
+        /** Специальные области и возможные проходы вокруг точки: считаются один раз для каждой вершины графа. */
+        final class CrossingInfo {
+            final List<Obstacle> areas;
+            final List<Crossing> crossings = new ArrayList<>();
+
+            CrossingInfo(List<Obstacle> areas) {
+                this.areas = areas;
+            }
+        }
+
+        final Map<Integer, CrossingInfo> crossingCache = new HashMap<>();
+        final Map<Long, Integer> dynamicIds = new HashMap<>();
+
         void addCrossings(Label l, Coordinate p) {
+            CrossingInfo info = l.v < statics.length ? crossingCache.get(l.v) : null;
+            if (info == null) {
+                info = computeCrossings(p);
+                if (l.v < statics.length) {
+                    crossingCache.put(l.v, info);
+                }
+            }
+            for (Crossing c : info.crossings) {
+                if (turnOk(l.dir, c.dir)) {
+                    if (l.length + c.end <= budget) {
+                        pushCrossing(l, p, c);
+                    } else {
+                        budgetPruned = true;
+                    }
+                }
+            }
+        }
+
+        CrossingInfo computeCrossings(Coordinate p) {
             Envelope env = new Envelope(p);
             env.expandBy(CROSSING_RADIUS_M);
             List<Obstacle> areas = new ArrayList<>();
@@ -531,8 +643,9 @@ public final class Router {
                     areas.add(o);
                 }
             }
+            CrossingInfo info = new CrossingInfo(areas);
             if (areas.isEmpty()) {
-                return;
+                return info;
             }
             Set<Long> tried = new LinkedHashSet<>();
             List<double[]> directions = new ArrayList<>();
@@ -546,28 +659,57 @@ public final class Router {
                 }
             }
             // Направления на вершины и цели, чей прямой путь упирается в специальную зону.
+            List<Coordinate> targets = new ArrayList<>();
             for (int idx : corridor) {
                 Coordinate w = statics[idx];
-                if (p.distance(w) < CROSSING_RADIUS_M && crossesAny(areas, p, w)) {
-                    addDirection(directions, tried, Angles.unit(p, w));
+                if (p.distance(w) < CROSSING_RADIUS_M) {
+                    targets.add(w);
                 }
             }
-            for (Goal g : goals) {
-                if (crossesAny(areas, p, g.xy)) {
+            targets.sort(Comparator.comparingDouble(w -> p.distance(w)));
+            int added = 0;
+            for (Coordinate w : targets) {
+                if (added < MAX_VERTEX_DIRECTIONS && crossesAny(areas, p, w)) {
+                    addDirection(directions, tried, Angles.unit(p, w));
+                    added++;
+                }
+            }
+            List<Goal> nearGoals = new ArrayList<>(goals);
+            nearGoals.sort(Comparator.comparingDouble(g -> p.distance(g.xy)));
+            added = 0;
+            for (Goal g : nearGoals) {
+                if (added < MAX_GOAL_DIRECTIONS && crossesAny(areas, p, g.xy)) {
                     addDirection(directions, tried, Angles.unit(p, g.xy));
+                    added++;
                 }
             }
             for (double[] u : directions) {
-                if (turnOk(l.dir, u)) {
-                    tryCrossing(l, p, u, areas);
+                String key = dn + ":" + Math.round(p.x * 1e3) + ":" + Math.round(p.y * 1e3) + ":"
+                        + Math.round(Math.toDegrees(Math.atan2(u[1], u[0])) * 10);
+                Object cached = crossingMemo.get(key);
+                if (cached == null) {
+                    Crossing computed = computeCrossing(p, u, areas);
+                    cached = computed == null ? NO_CROSSING : computed;
+                    crossingMemo.put(key, cached);
+                }
+                if (cached != NO_CROSSING) {
+                    info.crossings.add((Crossing) cached);
                 }
             }
+            return info;
         }
 
         boolean crossesAny(List<Obstacle> areas, Coordinate a, Coordinate b) {
-            LineString seg = factory.createLineString(new Coordinate[]{a, b});
+            Envelope segEnv = new Envelope(a, b);
+            LineString seg = null;
             for (Obstacle o : areas) {
-                if (o.geometry.intersects(seg)) {
+                if (!o.geometry.getEnvelopeInternal().intersects(segEnv)) {
+                    continue;
+                }
+                if (seg == null) {
+                    seg = factory.createLineString(new Coordinate[]{a, b});
+                }
+                if (obstacles.prepared(o).intersects(seg)) {
                     return true;
                 }
             }
@@ -581,14 +723,18 @@ public final class Router {
             }
         }
 
-        /** Одна попытка: прямой специальный проход из p по направлению u. */
-        void tryCrossing(Label l, Coordinate p, double[] u, List<Obstacle> areas) {
+        /** Одна попытка: прямой специальный проход из p по направлению u; null, если он невозможен. */
+        Crossing computeCrossing(Coordinate p, double[] u, List<Obstacle> areas) {
             Coordinate far = new Coordinate(p.x + u[0] * CROSSING_RAY_M, p.y + u[1] * CROSSING_RAY_M);
             LineString ray = factory.createLineString(new Coordinate[]{p, far});
+            Envelope rayEnv = ray.getEnvelopeInternal();
             // Интервалы луча внутри полигонов: [вход, выход] вдоль луча и объект.
             List<double[]> intervals = new ArrayList<>();
             List<Obstacle> owners = new ArrayList<>();
             for (Obstacle o : areas) {
+                if (!o.geometry.getEnvelopeInternal().intersects(rayEnv) || !obstacles.prepared(o).intersects(ray)) {
+                    continue;
+                }
                 Geometry inside;
                 try {
                     inside = ray.intersection(o.geometry);
@@ -597,7 +743,7 @@ public final class Router {
                 }
                 for (int i = 0; i < inside.getNumGeometries(); i++) {
                     Geometry piece = inside.getGeometryN(i);
-                    if (piece.getDimension() != 1) {
+                    if (piece.getDimension() != 1 || piece.isEmpty()) {
                         continue;
                     }
                     Coordinate[] cs = piece.getCoordinates();
@@ -608,7 +754,7 @@ public final class Router {
                 }
             }
             if (intervals.isEmpty()) {
-                return;
+                return null;
             }
             Integer[] order = new Integer[intervals.size()];
             for (int i = 0; i < order.length; i++) {
@@ -638,7 +784,7 @@ public final class Router {
                 }
             }
             if (first < -1e-9) {
-                return; // специальная полоса начиналась бы позади точки: поворот внутри прохода недопустим
+                return null; // специальная полоса начиналась бы позади точки: поворот внутри прохода недопустим
             }
             // Угол входа не меньше заданного для каждого пересекаемого объекта.
             for (int i = 0; i < members.size(); i++) {
@@ -647,46 +793,52 @@ public final class Router {
                     Coordinate e = new Coordinate(p.x + u[0] * entries.get(i), p.y + u[1] * entries.get(i));
                     double[] tangent = boundaryTangent(m.geometry, e);
                     if (tangent == null || Angles.acuteDeg(u, tangent) < m.rule.minAngleDeg - 1e-9) {
-                        return;
+                        return null;
                     }
                 }
-            }
-            if (l.length + end > budget) {
-                return;
             }
             Coordinate p1 = new Coordinate(p.x + u[0] * first, p.y + u[1] * first);
             Coordinate p2 = new Coordinate(p.x + u[0] * end, p.y + u[1] * end);
             Set<Obstacle> crossed = new HashSet<>(members);
             if (first > 1e-6 && !obstacles.segmentClear(p, p1, dn, null)) {
-                return;
+                return null;
             }
-            if (!obstacles.segmentClear(p1, p2, dn, crossed) || blocked(p, p2, null)) {
-                return;
+            if (!obstacles.segmentClear(p1, p2, dn, crossed)) {
+                return null;
             }
             // Вне специального интервала отступ до пересекаемых объектов обязан соблюдаться: его концы за пределами зон.
             for (Obstacle m : members) {
                 ObstacleSet.Zone z = obstacles.zone(m, dn);
                 if (z.geometry.intersects(factory.createPoint(p1)) || z.geometry.intersects(factory.createPoint(p2))) {
-                    return;
+                    return null;
                 }
+            }
+            return new Crossing(p1, p2, first, end, u, members, kMax);
+        }
+
+        void pushCrossing(Label l, Coordinate p, Crossing c) {
+            if (blocked(p, c.p2, null)) {
+                return;
             }
             List<Route.Leg> legs = new ArrayList<>();
             double addLength = 0;
             double addCost = 0;
-            if (first > 1e-6) {
-                legs.add(new Route.Leg(p, p1, false, 1, List.of(), false, false));
-                addLength += first;
-                addCost += first * price;
+            if (c.first > 1e-6) {
+                legs.add(new Route.Leg(p, c.p1, false, 1, List.of(), false, false));
+                addLength += c.first;
+                addCost += c.first * price;
             }
-            double special = end - first;
-            legs.add(new Route.Leg(p1, p2, true, kMax, new ArrayList<>(members), false, false));
+            double special = c.end - c.first;
+            legs.add(new Route.Leg(c.p1, c.p2, true, c.kMax, new ArrayList<>(c.members), false, false));
             addLength += special;
-            addCost += special * price * kMax;
+            addCost += special * price * c.kMax;
             double len = l.length + addLength;
             double cost = l.cost + addCost;
-            push(new Label(nextDynamic++, p2, u, len, cost, weight(profile, len, cost), l, legs), nearestGoalDistance(p2));
+            // Конец прохода получает устойчивый номер по координате: иначе метки не сравнивались бы между собой и множились.
+            long key = Math.round(c.p2.x * 100) * 1_000_003L + Math.round(c.p2.y * 100);
+            int id = dynamicIds.computeIfAbsent(key, k -> nextDynamic++);
+            push(new Label(id, c.p2, c.dir, len, cost, weight(profile, len, cost), l, legs), nearestGoalDistance(c.p2));
         }
-
         Route build(Label last, Goal goal) {
             List<Route.Leg> reversed = new ArrayList<>();
             for (Label l = last; l != null; l = l.parent) {

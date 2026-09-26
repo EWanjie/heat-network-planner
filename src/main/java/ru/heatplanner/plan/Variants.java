@@ -19,11 +19,22 @@ public final class Variants {
         public final JointPlanner.Solution solution;
         public final String strategy;
         public final List<PlanValidator.Violation> violations;
+        /** Допущения, на которых построен вариант (пусто — вариант строго по данным и правилам). */
+        public final List<String> assumptions;
+        final Router.Profile profile;
+        /** Тот же вариант до перестройки цепочек (null, если перестройка ничего не изменила). */
+        public Variant previous;
 
         Variant(JointPlanner.Solution solution, String strategy, List<PlanValidator.Violation> violations) {
+            this(solution, strategy, violations, Router.Profile.BALANCED);
+        }
+
+        Variant(JointPlanner.Solution solution, String strategy, List<PlanValidator.Violation> violations, Router.Profile profile) {
             this.solution = solution;
             this.strategy = strategy;
             this.violations = violations;
+            this.assumptions = assumptionsOf(solution);
+            this.profile = profile;
         }
     }
 
@@ -33,7 +44,31 @@ public final class Variants {
     private Variants() {
     }
 
-    public static List<Variant> generate(PlanInput in, ObstacleSet exact, JointPlanner planner, int maxVariants) {
+    /** Допущения решения: запасной подход к зданию и проход через дорогу с шириной, принятой по классу. */
+    static List<String> assumptionsOf(JointPlanner.Solution s) {
+        boolean fallback = false;
+        boolean road = false;
+        for (Branch b : s.branches) {
+            fallback |= !b.route.start.nearestBoundary;
+            for (Route.Leg leg : b.route.legs) {
+                for (Obstacle o : leg.crossed) {
+                    road |= o.assumedWidth;
+                }
+            }
+        }
+        List<String> out = new ArrayList<>();
+        if (road) {
+            out.add("ширина дороги принята по её классу в OpenStreetMap");
+        }
+        if (fallback) {
+            out.add("подход к зданию с ближайшей допустимой стороны, а не с ближайшей границы");
+        }
+        return out;
+    }
+
+    /** requireAssumptions — оставлять только варианты, построенные с допущениями (дополнительные варианты). */
+    public static List<Variant> generate(PlanInput in, ObstacleSet exact, JointPlanner planner, int maxVariants,
+                                         boolean requireAssumptions) {
         List<PlanInput.Target> nearest = new ArrayList<>(in.targets);
         nearest.sort(Comparator.comparingDouble(t -> distanceToNetwork(in, t)));
         List<PlanInput.Target> farthest = new ArrayList<>(nearest);
@@ -45,9 +80,11 @@ public final class Variants {
         List<Object[]> configs = new ArrayList<>();
         configs.add(new Object[]{nearest, Router.Profile.BALANCED, "Сначала ближние к сети точки, баланс стоимости и длины"});
         configs.add(new Object[]{farthest, Router.Profile.BALANCED, "Сначала дальние от сети точки, баланс стоимости и длины"});
-        configs.add(new Object[]{nearest, Router.Profile.COMPACT, "Сначала ближние точки, наименьшая длина новой сети"});
-        configs.add(new Object[]{nearest, Router.Profile.ECONOMIC, "Сначала ближние точки, наименьшая стоимость труб"});
-        configs.add(new Object[]{byFlow, Router.Profile.BALANCED, "Сначала точки с наибольшим расходом"});
+        if (!requireAssumptions) {
+            // Основной набор шире: разные порядок и показатель дают существенно разные сети. Дополнительный — две стратегии.
+            configs.add(new Object[]{nearest, Router.Profile.COMPACT, "Сначала ближние точки, наименьшая длина новой сети"});
+            configs.add(new Object[]{byFlow, Router.Profile.BALANCED, "Сначала точки с наибольшим расходом"});
+        }
         java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(configs.size());
         List<java.util.concurrent.Future<Variant>> futures = new ArrayList<>();
         for (Object[] c : configs) {
@@ -68,6 +105,9 @@ public final class Variants {
         } finally {
             pool.shutdown();
         }
+        if (requireAssumptions) {
+            all.removeIf(v -> v.assumptions.isEmpty());
+        }
         all.sort(Comparator.comparingDouble(v -> v.solution.score()));
         List<Variant> chosen = new ArrayList<>();
         for (Variant v : all) {
@@ -85,7 +125,43 @@ public final class Variants {
                 break;
             }
         }
-        return chosen;
+        // Дорогая перестройка цепочек — только для отобранных вариантов: по всем стратегиям она заняла бы слишком много.
+        List<java.util.concurrent.Future<Variant>> polished = new ArrayList<>();
+        java.util.concurrent.ExecutorService polishPool = java.util.concurrent.Executors.newFixedThreadPool(Math.max(1, chosen.size()));
+        try {
+            for (Variant c : chosen) {
+                polished.add(polishPool.submit(() -> {
+                    Router.Profile profile = profileOf(c);
+                    JointPlanner.Solution s = planner.improve(planner.rebuildChains(planner.improve(c.solution, profile, 2), profile), profile, 2);
+                    if (s.score() >= c.solution.score() - 1e-9) {
+                        return c;
+                    }
+                    List<PlanValidator.Violation> v = PlanValidator.validateTree(in, exact, s.branches, s.evaluation);
+                    for (PlanValidator.Violation x : v) {
+                        if (x.group == PlanValidator.Group.RULE) {
+                            return c;
+                        }
+                    }
+                    Variant improved = new Variant(s, c.strategy, v, c.profile);
+                    improved.previous = c;
+                    return improved;
+                }));
+            }
+            List<Variant> result = new ArrayList<>();
+            for (java.util.concurrent.Future<Variant> f : polished) {
+                result.add(f.get());
+            }
+            result.sort(Comparator.comparingDouble(x -> x.solution.score()));
+            return result;
+        } catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+            throw new IllegalStateException(e);
+        } finally {
+            polishPool.shutdown();
+        }
+    }
+
+    private static Router.Profile profileOf(Variant v) {
+        return v.profile;
     }
 
     private static Variant build(PlanInput in, ObstacleSet exact, JointPlanner planner, List<PlanInput.Target> order,
@@ -97,7 +173,7 @@ public final class Variants {
                 return null;
             }
         }
-        return new Variant(s, strategy, v);
+        return new Variant(s, strategy, v, profile);
     }
     static double distanceToNetwork(PlanInput in, PlanInput.Target t) {
         double d = Double.MAX_VALUE;

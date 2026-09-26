@@ -47,14 +47,18 @@ public final class TreeEvaluator {
         public final boolean existing;
         public final int dn;
         public final double cost;
+        /** Первая из ветвей, заканчивающихся в камере. */
         public final int branch;
+        /** Все ветви, заканчивающиеся в камере (в узле новой сети их до двух: вместе с проходящим стволом — четыре примыкания). */
+        public final List<Integer> branches;
 
-        Chamber(Coordinate xy, boolean existing, int dn, double cost, int branch) {
+        Chamber(Coordinate xy, boolean existing, int dn, double cost, int branch, List<Integer> branches) {
             this.xy = xy;
             this.existing = existing;
             this.dn = dn;
             this.cost = cost;
             this.branch = branch;
+            this.branches = branches;
         }
     }
 
@@ -83,6 +87,10 @@ public final class TreeEvaluator {
     private static final double EPS = 1e-6;
     /** Две врезки на одной ветви ближе этого расстояния (м) — одна камера на четыре участка недопустима для такой пары. */
     private static final double MIN_JOIN_GAP_M = 2.0;
+    /** Врезки ближе этого расстояния (м) — один узел: ветви заканчиваются в одной камере. */
+    private static final double SAME_NODE_M = 0.05;
+    /** В узле новой сети проходящий ствол даёт два примыкания, значит своих ветвей не более двух (всего четыре). */
+    private static final int MAX_BRANCHES_PER_NODE = 2;
 
     private TreeEvaluator() {
     }
@@ -110,22 +118,38 @@ public final class TreeEvaluator {
             }
         }
         double[][] bp = new double[n][];
+        // Положение врезки каждой дочерней ветви после объединения близких врезок в один узел.
+        double[] jpos = new double[n];
+        Map<Integer, List<Integer>> nodeMembers = new HashMap<>();
         for (int b = 0; b < n; b++) {
             List<Double> list = new ArrayList<>();
             list.add(0.0);
-            List<Double> joins = new ArrayList<>();
-            for (int c : children.get(b)) {
-                joins.add(bs.get(c).parentPos);
-            }
-            Collections.sort(joins);
-            for (int i = 0; i < joins.size(); i++) {
-                if (i > 0 && joins.get(i) - joins.get(i - 1) < MIN_JOIN_GAP_M) {
-                    return res.fail("две врезки на одной ветви ближе " + MIN_JOIN_GAP_M + " м");
+            List<Integer> kids = new ArrayList<>(children.get(b));
+            kids.sort(java.util.Comparator.comparingDouble(c -> bs.get(c).parentPos));
+            double groupStart = Double.NEGATIVE_INFINITY;
+            List<Integer> group = null;
+            for (int c : kids) {
+                double pos = bs.get(c).parentPos;
+                if (group != null && pos - groupStart < SAME_NODE_M) {
+                    if (group.size() >= MAX_BRANCHES_PER_NODE) {
+                        return res.fail("в узле больше четырёх примыкающих участков");
+                    }
+                    group.add(c);
+                    jpos[c] = groupStart;
+                    continue;
                 }
-                if (!bs.get(b).canJoinAt(joins.get(i))) {
+                if (group != null && pos - groupStart < MIN_JOIN_GAP_M) {
+                    return res.fail("два узла на одной ветви ближе " + MIN_JOIN_GAP_M + " м");
+                }
+                if (!bs.get(b).canJoinAt(pos)) {
                     return res.fail("врезка на участке, куда её ставить нельзя");
                 }
-                list.add(joins.get(i));
+                groupStart = pos;
+                group = new ArrayList<>();
+                group.add(c);
+                jpos[c] = pos;
+                nodeMembers.put(c, group);
+                list.add(pos);
             }
             list.add(bs.get(b).total);
             bp[b] = list.stream().mapToDouble(Double::doubleValue).toArray();
@@ -139,7 +163,7 @@ public final class TreeEvaluator {
             for (int k = 0; k < segs; k++) {
                 double f = bs.get(b).target.flow;
                 for (int c : children.get(b)) {
-                    if (bs.get(c).parentPos <= bp[b][k] + EPS) {
+                    if (jpos[c] <= bp[b][k] + EPS) {
                         f += sub[c];
                     }
                 }
@@ -165,7 +189,7 @@ public final class TreeEvaluator {
                 if (br.parent < 0) {
                     break;
                 }
-                startK = indexOf(bp[br.parent], br.parentPos);
+                startK = indexOf(bp[br.parent], jpos[cur]);
                 cur = br.parent;
             }
             paths.add(path);
@@ -265,7 +289,7 @@ public final class TreeEvaluator {
                 if (br.existing.kind == Goals.Kind.EXISTING_CHAMBER) {
                     res.tieInCost += Rules.EXISTING_CHAMBER_TIE_IN;
                     res.existingTieIns++;
-                    res.chambers.add(new Chamber(br.attach, true, lastDn, Rules.EXISTING_CHAMBER_TIE_IN, b));
+                    res.chambers.add(new Chamber(br.attach, true, lastDn, Rules.EXISTING_CHAMBER_TIE_IN, b, List.of(b)));
                     int used = ties.merge(br.existing.chamber, 1, Integer::sum);
                     if (in != null && Goals.adjacency(in, br.existing.chamber) + used > Rules.MAX_CHAMBER_SEGMENTS) {
                         return res.fail("к существующей камере примыкает больше четырёх участков");
@@ -273,15 +297,22 @@ public final class TreeEvaluator {
                 } else {
                     double cost = Rules.chamberCost(Math.max(lastDn, br.existing.existingDn));
                     res.chamberCost += cost;
-                    res.chambers.add(new Chamber(br.attach, false, Math.max(lastDn, br.existing.existingDn), cost, b));
+                    res.chambers.add(new Chamber(br.attach, false, Math.max(lastDn, br.existing.existingDn), cost, b, List.of(b)));
                 }
             } else {
+                List<Integer> members = nodeMembers.get(b);
+                if (members == null) {
+                    continue; // второй ветви узла: камера уже записана вместе с первой
+                }
                 int p = br.parent;
-                int k = indexOf(bp[p], br.parentPos);
-                int max = Math.max(lastDn, Math.max(Rules.DN[dn[p][k - 1]], Rules.DN[dn[p][k]]));
+                int k = indexOf(bp[p], jpos[b]);
+                int max = Math.max(Rules.DN[dn[p][k - 1]], Rules.DN[dn[p][k]]);
+                for (int m : members) {
+                    max = Math.max(max, Rules.DN[dn[m][dn[m].length - 1]]);
+                }
                 double cost = Rules.chamberCost(max);
                 res.chamberCost += cost;
-                res.chambers.add(new Chamber(br.attach, false, max, cost, b));
+                res.chambers.add(new Chamber(br.attach, false, max, cost, b, new ArrayList<>(members)));
             }
         }
         return res;

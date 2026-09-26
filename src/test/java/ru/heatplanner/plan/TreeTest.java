@@ -138,4 +138,33 @@ class TreeTest {
         Branch d = branch("C", 10, 0, 20.5, c(20, 40), c(20, 19.5), c(50, 19.5));
         assertFalse(TreeEvaluator.evaluate(null, NONE, List.of(a, b, d)).feasible);
     }
+    /** Два ответвления заканчиваются в одной камере: проходящий ствол даёт два примыкания, ветви — ещё два, всего четыре. */
+    @Test
+    void twoBranchesShareOneChamber() {
+        Branch a = branch("A", 20, -1, 0, c(50, 40), c(50, 0));
+        Branch b = branch("B", 20, 0, 20, c(80, 40), c(80, 20), c(50, 20));
+        Branch d = branch("C", 20, 0, 20, c(20, 40), c(20, 20), c(50, 20));
+        List<Branch> bs = List.of(a, b, d);
+        TreeEvaluator.Result ev = TreeEvaluator.evaluate(null, NONE, bs);
+        assertTrue(ev.feasible, ev.reason);
+        // Камера у сети и общий узел: две камеры, а не три.
+        assertEquals(2, ev.chambers.size());
+        boolean shared = false;
+        for (TreeEvaluator.Chamber ch : ev.chambers) {
+            shared |= ch.branches.size() == 2;
+        }
+        assertTrue(shared);
+        // После узла ствол несёт 60 т/ч: ДУ 150.
+        assertEquals(150, ev.pieces.get(1).dn);
+        assertTrue(codes(bs, ev).isEmpty(), codes(bs, ev).toString());
+    }
+
+    @Test
+    void thirdBranchInTheSameNodeIsRejected() {
+        Branch a = branch("A", 10, -1, 0, c(50, 40), c(50, 0));
+        Branch b = branch("B", 10, 0, 20, c(80, 40), c(80, 20), c(50, 20));
+        Branch d = branch("C", 10, 0, 20, c(20, 40), c(20, 20), c(50, 20));
+        Branch e = branch("E", 10, 0, 20, c(65, 60), c(65, 20), c(50, 20));
+        assertFalse(TreeEvaluator.evaluate(null, NONE, List.of(a, b, d, e)).feasible);
+    }
 }

@@ -90,22 +90,66 @@ public final class PlanInput {
 
     private final GeometryFactory factory = new GeometryFactory();
     private final RuleSet rules;
+    private final boolean assumeRoadWidth;
+    private int roadsAssumed;
+    private int roadsIgnored;
     private final Set<String> unsupported = new LinkedHashSet<>();
     private int roadsWithoutWidth;
     private int roadsFromCenterline;
 
-    private PlanInput(RuleSet rules) {
+    private PlanInput(RuleSet rules, boolean assumeRoadWidth) {
         this.rules = rules;
+        this.assumeRoadWidth = assumeRoadWidth;
     }
 
-    public static PlanInput read(Path file, RuleSet rules) throws IOException {
-        try (InputStream in = Files.newInputStream(file)) {
-            return read(in, rules);
+    /** Ширина дороги по её классу в OpenStreetMap, м (полная ширина проезжей части и обочин); допущение проекта, не норматив. */
+    static double classWidth(String highway) {
+        switch (highway == null ? "" : highway) {
+            case "motorway":
+                return 20;
+            case "trunk":
+                return 18;
+            case "primary":
+                return 14;
+            case "secondary":
+                return 11;
+            case "tertiary":
+                return 9;
+            default:
+                return highway != null && highway.endsWith("_link") ? 6 : 0;
         }
     }
 
+    public static PlanInput read(Path file, RuleSet rules) throws IOException {
+        return read(file, null, rules, false);
+    }
+
+    /**
+     * Читает файл и (необязательно) дополнительные дороги OpenStreetMap. assumeRoadWidth — принимать ширину дороги без
+     * ширины в данных по её классу; такие проходы помечаются как допущение.
+     */
+    public static PlanInput read(Path file, Path roads, RuleSet rules, boolean assumeRoadWidth) throws IOException {
+        PlanInput input = new PlanInput(rules, assumeRoadWidth);
+        try (InputStream in = Files.newInputStream(file)) {
+            input.readFeatures(in);
+        }
+        if (roads != null) {
+            try (InputStream in = Files.newInputStream(roads)) {
+                input.readFeatures(in);
+            }
+        }
+        input.finish();
+        return input;
+    }
+
     public static PlanInput read(InputStream in, RuleSet rules) throws IOException {
-        PlanInput input = new PlanInput(rules);
+        PlanInput input = new PlanInput(rules, false);
+        input.readFeatures(in);
+        input.finish();
+        return input;
+    }
+
+    private void readFeatures(InputStream in) throws IOException {
         ObjectMapper mapper = new ObjectMapper();
         try (JsonParser parser = mapper.getFactory().createParser(in)) {
             parser.nextToken();
@@ -114,15 +158,13 @@ public final class PlanInput {
                 parser.nextToken();
                 if ("features".equals(field)) {
                     while (parser.nextToken() == JsonToken.START_OBJECT) {
-                        input.add(mapper.readTree(parser));
+                        add(mapper.readTree(parser));
                     }
                 } else {
                     parser.skipChildren();
                 }
             }
         }
-        input.finish();
-        return input;
     }
 
     private void add(JsonNode feature) {
@@ -178,6 +220,16 @@ public final class PlanInput {
                 obstacles.add(new Obstacle(obstacles.size(), id, rule, BufferOp.bufferOp(geom, width / 2, p), 0,
                         source, false, true));
                 roadsFromCenterline++;
+            } else if (assumeRoadWidth && classWidth(props.path("highway").asText(null)) > 0) {
+                BufferParameters p = new BufferParameters(rules.bufferQuadrantSegments, BufferParameters.CAP_FLAT,
+                        BufferParameters.JOIN_ROUND, 5.0);
+                double assumed = classWidth(props.path("highway").asText());
+                obstacles.add(new Obstacle(obstacles.size(), id, rule, BufferOp.bufferOp(geom, assumed / 2, p), 0,
+                        source, false, true, true));
+                roadsAssumed++;
+            } else if ("OpenStreetMap".equals(source)) {
+                // Дорога OSM без ширины в данных и вне допущения: границы полосы неизвестны, в расчёте её нет.
+                roadsIgnored++;
             } else {
                 obstacles.add(new Obstacle(obstacles.size(), id, rule, geom, 0, source, true, false));
                 roadsWithoutWidth++;
@@ -218,6 +270,14 @@ public final class PlanInput {
         if (roadsFromCenterline > 0) {
             diagnostics.add("Дорог, заданных осью и шириной: " + roadsFromCenterline
                     + ". Расчётная полоса — буфер на половину ширины, это модель, а не измеренная граница проезжей части.");
+        }
+        if (roadsIgnored > 0) {
+            diagnostics.add("Дорог OpenStreetMap без ширины в расчёте нет: " + roadsIgnored + ". Основные варианты строятся строго по данным файла; "
+                    + "дополнительные варианты учитывают магистральные и городские дороги по их классу (местные и внутриквартальные проезды не учитываются).");
+        }
+        if (roadsAssumed > 0) {
+            diagnostics.add("Дорог без ширины, принятой по классу OpenStreetMap: " + roadsAssumed
+                    + ". Проходы через них считаются допущением и попадают только в дополнительные варианты.");
         }
         if (roadsWithoutWidth > 0) {
             diagnostics.add("ROAD_WIDTH_REQUIRED: дорог без ширины " + roadsWithoutWidth

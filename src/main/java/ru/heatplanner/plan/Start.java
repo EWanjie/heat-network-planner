@@ -154,7 +154,8 @@ public final class Start {
             Coordinate boundary = cand.boundary;
             double dist = boundary.distance(target.xy);
             boolean isNearest = dist <= nearestDistance + NEAREST_TOLERANCE_M;
-            if (!isNearest && rules.ownApproach == RuleSet.OwnApproachMode.NEAREST_ONLY) {
+            if (!isNearest && (rules.ownApproach == RuleSet.OwnApproachMode.NEAREST_ONLY || !out.isEmpty())) {
+                // Запасные подходы только для здания, к которому по правилу (к ближайшей границе) подойти нельзя.
                 break;
             }
             double[] u = dist < 1e-6 ? outwardNormal(own, boundary) : Angles.unit(target.xy, boundary);
@@ -269,7 +270,7 @@ public final class Start {
     private static Coordinate exitOfOwnZone(Coordinate boundary, double[] u, Set<Obstacle> own, ObstacleSet obstacles, int dn) {
         double reach = 0;
         for (Obstacle o : own) {
-            reach = Math.max(reach, o.axisDistance(dn));
+            reach = Math.max(reach, o.axisDistance(obstacles.zoneDn(dn)));
         }
         final double step = 0.05;
         for (double s = step; s <= reach + 20; s += step) {

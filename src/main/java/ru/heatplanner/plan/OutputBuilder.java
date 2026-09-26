@@ -49,10 +49,20 @@ public final class OutputBuilder {
     }
 
     public static Map<String, Object> build(List<Variants.Variant> variants) {
+        return build(variants, new ArrayList<>());
+    }
+
+    /** Основные варианты (v1, v2, ...) и, если переданы, дополнительные (a1, a2, ...) с перечнем допущений в сводке. */
+    public static Map<String, Object> build(List<Variants.Variant> variants, List<Variants.Variant> additional) {
         List<Object> features = new ArrayList<>();
         int rank = 1;
         for (Variants.Variant v : variants) {
-            addVariant(features, v.solution, "v" + rank, rank);
+            addVariant(features, v, "v" + rank, rank);
+            rank++;
+        }
+        rank = 1;
+        for (Variants.Variant v : additional) {
+            addVariant(features, v, "a" + rank, rank);
             rank++;
         }
         Map<String, Object> fc = new LinkedHashMap<>();
@@ -73,7 +83,8 @@ public final class OutputBuilder {
         double cost;
     }
 
-    private static void addVariant(List<Object> out, JointPlanner.Solution s, String variantId, int rank) {
+    private static void addVariant(List<Object> out, Variants.Variant variant, String variantId, int rank) {
+        JointPlanner.Solution s = variant.solution;
         TreeEvaluator.Result ev = s.evaluation;
         int n = s.branches.size();
         // Узел, в который заканчивается каждая ветвь (существующая или новая камера), и его координаты.
@@ -89,7 +100,9 @@ public final class OutputBuilder {
                 tieInCost += cents(c.cost);
             } else {
                 String id = variantId + "_chamber_" + (++chamberNo);
-                endNode[c.branch] = id;
+                for (int member : c.branches) {
+                    endNode[member] = id;
+                }
                 Map<String, Object> props = new LinkedHashMap<>();
                 props.put("id", id);
                 props.put("object_type", "heat_chamber");
@@ -155,7 +168,7 @@ public final class OutputBuilder {
                 cum += p.length;
                 Object node = null;
                 for (int j = 0; j < joinPos.size(); j++) {
-                    if (Math.abs(joinPos.get(j)[0] - cum) < 1e-6) {
+                    if (Math.abs(joinPos.get(j)[0] - cum) < 0.06) {
                         node = joinNode.get(j);
                     }
                 }
@@ -199,6 +212,9 @@ public final class OutputBuilder {
             ids.add(idValue(u.target.id));
         }
         props.put("unconnected_oks_ids", ids);
+        if (!variant.assumptions.isEmpty()) {
+            props.put("assumptions", variant.assumptions);
+        }
         out.add(feature(props, null, null));
     }
 

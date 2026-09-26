@@ -69,6 +69,11 @@ public final class JointPlanner {
     private static final int MAX_BRANCH_GOALS = 40;
     /** Диаметр повышается из-за предельной длины не более чем на столько шагов: дальше трасса всё равно не осмысленна. */
     private static final int MAX_DN_STEPS = 4;
+    /** Самая большая перестраиваемая цепочка и число попыток за проход. */
+    private static final int CHAIN_MAX_SIZE = 6;
+    private static final int CHAIN_ATTEMPTS = 3;
+    /** Поиск, обработавший не больше стольких меток и не нашедший пути, считается зажатым у старта. */
+    private static final int CORNERED_LABELS = 50;
     private static final double BRANCH_GOAL_STEP_M = 30;
 
     /** Отладочный вывод кандидатов (только для исследований). */
@@ -97,7 +102,7 @@ public final class JointPlanner {
         this.exact = exact;
         this.exactRules = rules;
         this.rules = rules.withGeometryEps(ROUTING_MARGIN_M);
-        this.obstacles = new ObstacleSet(exact.all(), this.rules);
+        this.obstacles = new ObstacleSet(exact.all(), this.rules, true);
         this.router = new Router(obstacles, this.rules);
     }
 
@@ -136,9 +141,85 @@ public final class JointPlanner {
         return best;
     }
 
+    /**
+     * Улучшение готового решения: жадное добавление зависит от порядка целей, поэтому ранние ветви могут вырасти в
+     * длинную цепочку. Каждая ветвь без потомков снимается и подключается заново ко всем вариантам (сеть и ближайшие
+     * ветви); замена принимается, если показатель ранжирования всей сети улучшился. Повторяется несколько проходов:
+     * освободившийся родитель на следующем проходе тоже становится концом цепочки.
+     */
+    public Solution improve(Solution start, Router.Profile profile, int passes) {
+        Solution best = start;
+        for (int pass = 0; pass < passes; pass++) {
+            boolean changed = false;
+            for (int k = best.branches.size() - 1; k >= 0; k--) {
+                if (!isLeaf(best.branches, k)) {
+                    continue;
+                }
+                List<Branch> rest = withoutBranch(best.branches, k);
+                PlanInput.Target t = best.branches.get(k).target;
+                double bestScore = best.score();
+                Branch replacement = null;
+                for (Branch candidate : candidates(t, rest, new ArrayList<>(), profile)) {
+                    List<Branch> trial = new ArrayList<>(rest);
+                    trial.add(candidate);
+                    TreeEvaluator.Result r = TreeEvaluator.evaluate(in, exact, trial);
+                    if (!r.feasible) {
+                        continue;
+                    }
+                    double s = Rules.score(r.cost() + best.penalty, r.length);
+                    if (s < bestScore - 1e-6) {
+                        bestScore = s;
+                        replacement = candidate;
+                    }
+                }
+                if (replacement != null) {
+                    List<Branch> next = new ArrayList<>(rest);
+                    next.add(replacement);
+                    best = new Solution(next, best.unconnected, TreeEvaluator.evaluate(in, exact, next));
+                    changed = true;
+                    if (debug) {
+                        System.out.println("DBG improve moved t=" + t.id + " score=" + best.score());
+                    }
+                }
+            }
+            if (!changed) {
+                break;
+            }
+        }
+        return best;
+    }
+
+    private static boolean isLeaf(List<Branch> bs, int k) {
+        for (Branch b : bs) {
+            if (b.parent == k) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Список без ветви k: номера родителей после неё сдвигаются. */
+    static List<Branch> withoutBranch(List<Branch> bs, int k) {
+        List<Branch> out = new ArrayList<>();
+        for (int i = 0; i < bs.size(); i++) {
+            if (i == k) {
+                continue;
+            }
+            Branch b = bs.get(i);
+            int parent = b.parent > k ? b.parent - 1 : b.parent;
+            out.add(parent == b.parent ? b : new Branch(b.target, b.route, parent, b.existing, b.attach, b.parentPos));
+        }
+        return out;
+    }
+
     public Solution plan(List<PlanInput.Target> order, Router.Profile profile) {
-        List<Branch> branches = new ArrayList<>();
-        List<Unconnected> bad = new ArrayList<>();
+        return insertAll(new ArrayList<>(), new ArrayList<>(), order, profile);
+    }
+
+    /** Добавляет цели по очереди к уже построенным ветвям base; не подключённые попадают в список bad. */
+    private Solution insertAll(List<Branch> base, List<Unconnected> lostBefore, List<PlanInput.Target> order, Router.Profile profile) {
+        List<Branch> branches = new ArrayList<>(base);
+        List<Unconnected> bad = new ArrayList<>(lostBefore);
         for (PlanInput.Target t : order) {
             long began = System.currentTimeMillis();
             Branch best = null;
@@ -176,6 +257,100 @@ public final class JointPlanner {
         return new Solution(branches, bad, r);
     }
 
+    /**
+     * Перестройка цепочек: ветвь вместе со всеми, кто к ней (прямо или через другие) примыкает, снимается и собирается
+     * заново в другом порядке (сначала дальние от сети, сначала ближние). Так меняются роли внутри цепочки: ствол
+     * может пойти от другого дома. Замена принимается, если показатель S всей сети улучшился.
+     */
+    public Solution rebuildChains(Solution start, Router.Profile profile) {
+        Solution best = start;
+        boolean changed = true;
+        int rounds = 0;
+        while (changed && rounds++ < 1) {
+            changed = false;
+            // Пробуем самые большие группы (цепочки): их перестройка меняет структуру сильнее всего.
+            List<Integer> roots = new ArrayList<>();
+            for (int k = 0; k < best.branches.size(); k++) {
+                int size = subtree(best.branches, k).size();
+                if (size >= 2 && size <= CHAIN_MAX_SIZE) {
+                    roots.add(k);
+                }
+            }
+            final Solution current = best;
+            roots.sort(Comparator.comparingInt((Integer k) -> -subtree(current.branches, k).size()));
+            for (int attempt = 0; attempt < Math.min(CHAIN_ATTEMPTS, roots.size()); attempt++) {
+                int k = roots.get(attempt);
+                List<Integer> group = subtree(best.branches, k);
+                List<Branch> rest = new ArrayList<>();
+                List<PlanInput.Target> targets = new ArrayList<>();
+                for (int i = 0; i < best.branches.size(); i++) {
+                    if (!group.contains(i)) {
+                        rest.add(best.branches.get(i));
+                    } else {
+                        targets.add(best.branches.get(i).target);
+                    }
+                }
+                rest = renumber(best.branches, group);
+                List<List<PlanInput.Target>> orders = new ArrayList<>();
+                List<PlanInput.Target> far = new ArrayList<>(targets);
+                far.sort(Comparator.comparingDouble((PlanInput.Target t) -> -Variants.distanceToNetwork(in, t)));
+                List<PlanInput.Target> near = new ArrayList<>(far);
+                Collections.reverse(near);
+                orders.add(far);
+                orders.add(near);
+                Solution improved = null;
+                for (List<PlanInput.Target> order : orders) {
+                    Solution s = insertAll(rest, best.unconnected, order, profile);
+                    if (s.unconnected.size() <= best.unconnected.size() && s.score() < (improved == null ? best.score() : improved.score()) - 1e-6) {
+                        improved = s;
+                    }
+                }
+                if (improved != null) {
+                    best = improved;
+                    changed = true;
+                    if (debug) {
+                        System.out.println("DBG chain rebuilt at t=" + best.branches.get(Math.min(k, best.branches.size() - 1)).target.id + " score=" + best.score());
+                    }
+                    break; // индексы сменились: начинаем обход заново
+                }
+            }
+        }
+        return best;
+    }
+
+    /** Номера ветви k и всех её потомков. */
+    private static List<Integer> subtree(List<Branch> bs, int k) {
+        List<Integer> out = new ArrayList<>();
+        out.add(k);
+        for (int i = k + 1; i < bs.size(); i++) {
+            if (out.contains(bs.get(i).parent)) {
+                out.add(i);
+            }
+        }
+        return out;
+    }
+
+    /** Ветви без указанной группы: родители переименовываются по новым номерам (группа — замкнутое поддерево). */
+    private static List<Branch> renumber(List<Branch> bs, List<Integer> removed) {
+        int[] shift = new int[bs.size()];
+        int gone = 0;
+        for (int i = 0; i < bs.size(); i++) {
+            shift[i] = i - gone;
+            if (removed.contains(i)) {
+                gone++;
+            }
+        }
+        List<Branch> out = new ArrayList<>();
+        for (int i = 0; i < bs.size(); i++) {
+            if (removed.contains(i)) {
+                continue;
+            }
+            Branch b = bs.get(i);
+            int parent = b.parent < 0 ? -1 : shift[b.parent];
+            out.add(parent == b.parent ? b : new Branch(b.target, b.route, parent, b.existing, b.attach, b.parentPos));
+        }
+        return out;
+    }
     /** Поиск без запаса: нужен, когда выход от здания лежит в полосе запаса у чужого отступа. */
     private Router exactRouter() {
         if (exactRouter == null) {
@@ -187,7 +362,6 @@ public final class JointPlanner {
         }
         return exactRouter;
     }
-
     private static boolean startRefusal(String reason) {
         return reason.startsWith("ближайшая") || reason.startsWith("выход") || reason.startsWith("точка подключения")
                 || reason.startsWith("финальный") || reason.startsWith("направление");
@@ -205,7 +379,7 @@ public final class JointPlanner {
         }
     }
 
-    private List<Branch> candidates(PlanInput.Target t, List<Branch> branches, List<String> reasons, Router.Profile profile) {
+    List<Branch> candidates(PlanInput.Target t, List<Branch> branches, List<String> reasons, Router.Profile profile) {
         List<Branch> out = new ArrayList<>();
         int first = Rules.indexForFlow(t.flow);
         if (first < 0) {
@@ -258,48 +432,180 @@ public final class JointPlanner {
         return out;
     }
 
+    /** Итог поиска для одного диаметра. */
+    private static final class Outcome {
+        final Route best;
+        /** Пути отбрасывались из-за предельной длины: с большим диаметром маршрут мог бы найтись. */
+        final boolean limited;
+        /** К точке нельзя подойти от здания вовсе. */
+        final boolean noStart;
+        final String reason;
+
+        Outcome(Route best, boolean limited, boolean noStart, String reason) {
+            this.best = best;
+            this.limited = limited;
+            this.noStart = noStart;
+            this.reason = reason;
+        }
+    }
+
+    /**
+     * Поиск к сети без преграды не зависит от уже построенных ветвей, поэтому его результат общий для всех стратегий и
+     * шагов: если такого пути нет, то с преградой его тем более нет, а если он есть и не задевает преграду, то он и
+     * оптимален для неё.
+     */
+    private final java.util.concurrent.ConcurrentHashMap<String, Outcome> freeMemo = new java.util.concurrent.ConcurrentHashMap<>();
+
     /** Трасса цели к сети (onto == null) или к точкам одной ветви; ДУ растёт, пока трасса не уложится в предельную длину. */
     private Found search(PlanInput.Target t, int firstDn, Branch onto, List<Branch> branches, Geometry barrier, Router.Profile profile) {
         List<String> reasons = new ArrayList<>();
         for (int i = firstDn; i < Math.min(Rules.DN.length, firstDn + MAX_DN_STEPS); i++) {
-            int dn = Rules.DN[i];
-            List<Start.Refusal> why = new ArrayList<>();
-            ObstacleSet set = obstacles;
-            Router rt = router;
-            List<Start> starts = Start.forTarget(t, set, dn, rules, why);
-            if (starts.isEmpty()) {
-                // Запас мешает только выходу от здания: ищем без запаса, а итоговый диаметр проверит оценка дерева.
-                why.clear();
-                set = exact;
-                rt = exactRouter();
-                starts = Start.forTarget(t, set, dn, exactRules, why);
-            }
-            if (starts.isEmpty()) {
-                if (!why.isEmpty()) {
-                    reasons.add(why.get(0).message());
+            Outcome o;
+            if (onto == null) {
+                String key = t.id.value() + "|" + t.id.isNumeric() + "|" + i + "|" + profile;
+                Outcome free = freeMemo.get(key);
+                if (free == null) {
+                    free = attempt(t, i, null, branches, null, profile);
+                    freeMemo.put(key, free);
                 }
+                if (free.noStart || (free.best == null && !free.limited)) {
+                    o = free;
+                } else if (free.best != null && (barrier == null || !lineOf(free.best).intersects(barrier))) {
+                    o = free;
+                } else {
+                    o = attempt(t, i, null, branches, barrier, profile);
+                }
+            } else {
+                o = attempt(t, i, onto, branches, barrier, profile);
+            }
+            if (o.reason != null) {
+                reasons.add(o.reason);
+            }
+            if (o.best != null) {
+                return new Found(o.best, reasons);
+            }
+            if (o.noStart || !o.limited) {
+                // Пути нет не из-за предельной длины: больший диаметр даёт только большие отступы, маршрут не появится.
                 return new Found(null, reasons);
-            }
-            Route best = null;
-            for (Start s : starts) {
-                List<Goal> goals = onto == null ? Goals.forStart(in, set, s.origin, dn)
-                        : branchGoals(onto, branches.indexOf(onto), s.origin);
-                if (goals.isEmpty()) {
-                    continue;
-                }
-                Router.Result r = rt.findRoute(s, goals, dn, profile, Rules.MAX_LENGTH[i], barrier);
-                if (r.route != null && (best == null || r.route.cost < best.cost)) {
-                    best = r.route;
-                }
-            }
-            if (best != null) {
-                return new Found(best, reasons);
             }
         }
         return new Found(null, reasons);
     }
+
+    /** Подходы к цели и причина отказа для одного диаметра и набора ограничений: общие для всех стратегий. */
+    private static final class Starts {
+        final List<Start> list;
+        final String reason;
+        final boolean exactSet;
+
+        Starts(List<Start> list, String reason, boolean exactSet) {
+            this.list = list;
+            this.reason = reason;
+            this.exactSet = exactSet;
+        }
+    }
+
+    private final java.util.concurrent.ConcurrentHashMap<String, Starts> startsMemo = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, List<Goal>> goalsMemo = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private Starts startsFor(PlanInput.Target t, int dn) {
+        String key = t.id.value() + "|" + t.id.isNumeric() + "|" + dn;
+        return startsMemo.computeIfAbsent(key, k -> {
+            List<Start.Refusal> why = new ArrayList<>();
+            List<Start> starts = Start.forTarget(t, obstacles, dn, rules, why);
+            boolean nearestOk = false;
+            for (Start s : starts) {
+                nearestOk |= s.nearestBoundary;
+            }
+            if (nearestOk) {
+                return new Starts(starts, null, false);
+            }
+            List<Start> withoutMargin = Start.forTarget(t, exact, dn, exactRules, new ArrayList<>());
+            boolean exactNearest = false;
+            for (Start s : withoutMargin) {
+                exactNearest |= s.nearestBoundary;
+            }
+            if (!starts.isEmpty() && !exactNearest) {
+                return new Starts(starts, null, false);
+            }
+            if (exactNearest) {
+                return new Starts(withoutMargin, null, true);
+            }
+            // Запас мешает только выходу от здания: ищем без запаса, а итоговый диаметр проверит оценка дерева.
+            why.clear();
+            starts = Start.forTarget(t, exact, dn, exactRules, why);
+            return new Starts(starts, why.isEmpty() ? null : why.get(0).message(), true);
+        });
+    }
+
+    private List<Goal> networkGoals(ObstacleSet set, Coordinate origin, int dn) {
+        String key = (set == exact ? "e" : "m") + "|" + dn + "|" + Math.round(origin.x * 100) + "|" + Math.round(origin.y * 100);
+        return goalsMemo.computeIfAbsent(key, k -> Goals.forStart(in, set, origin, dn));
+    }
+
+    /** Подходы к цели без запаса (только для исключений: запас зажал старт). */
+    private final java.util.concurrent.ConcurrentHashMap<String, List<Start>> exactStartsMemo = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private Outcome attempt(PlanInput.Target t, int i, Branch onto, List<Branch> branches, Geometry barrier, Router.Profile profile) {
+        int dn = Rules.DN[i];
+        Starts found = startsFor(t, dn);
+        if (found.list.isEmpty()) {
+            return new Outcome(null, false, true, found.reason);
+        }
+        boolean[] cornered = new boolean[1];
+        Outcome o = run(t, i, found.list, found.exactSet ? exact : obstacles, found.exactSet ? exactRouter() : router,
+                onto, branches, barrier, profile, cornered);
+        if (o.best == null && cornered[0] && !found.exactSet) {
+            // Поиск умер у самого старта: запас у чужого отступа не оставил выхода. Повторяем без запаса,
+            // а итоговый диаметр потом проверит оценка дерева.
+            String key = t.id.value() + "|" + t.id.isNumeric() + "|" + dn;
+            List<Start> exactStarts = exactStartsMemo.computeIfAbsent(key,
+                    k -> Start.forTarget(t, exact, dn, exactRules, new ArrayList<>()));
+            if (!exactStarts.isEmpty()) {
+                Outcome again = run(t, i, exactStarts, exact, exactRouter(), onto, branches, barrier, profile, new boolean[1]);
+                if (again.best != null) {
+                    return again;
+                }
+            }
+        }
+        return o;
+    }
+
+    private Outcome run(PlanInput.Target t, int i, List<Start> starts, ObstacleSet set, Router rt, Branch onto, List<Branch> branches,
+                        Geometry barrier, Router.Profile profile, boolean[] cornered) {
+        int dn = Rules.DN[i];
+        Route best = null;
+        boolean limited = false;
+        // Запасной подход (к зданию, к которому по правилу не подойти): берётся ближайшая возможная граница, а не
+        // самая выгодная из нескольких; следующая по расстоянию пробуется только если от этой маршрута нет.
+        boolean sequential = !starts.isEmpty() && !starts.get(0).nearestBoundary;
+        for (Start s : starts) {
+            if (sequential && best != null) {
+                break;
+            }
+            List<Goal> goals = onto == null ? networkGoals(set, s.origin, dn)
+                    : branchGoals(onto, branches.indexOf(onto), s.origin, branches);
+            if (goals.isEmpty()) {
+                continue;
+            }
+            long began = System.currentTimeMillis();
+            Router.Result r = rt.findRoute(s, goals, dn, profile, Rules.MAX_LENGTH[i], barrier);
+            if (debug) {
+                System.out.println("DBG search t=" + t.id + " onto=" + (onto == null ? "net" : onto.target.id.value()) + " dn=" + dn
+                        + " goals=" + goals.size() + " " + (System.currentTimeMillis() - began) + " ms " + r.status + " labels=" + r.labels);
+            }
+            limited |= r.lengthLimited;
+            if (r.route == null && r.labels <= CORNERED_LABELS) {
+                cornered[0] = true;
+            }
+            if (r.route != null && (best == null || r.route.cost < best.cost)) {
+                best = r.route;
+            }
+        }
+        return new Outcome(best, limited, false, null);
+    }
     /** Цели поиска на обычных участках ветви: ближайшая к началу поиска точка и точки с шагом вдоль ветви. */
-    private List<Goal> branchGoals(Branch b, int index, Coordinate origin) {
+    private List<Goal> branchGoals(Branch b, int index, Coordinate origin, List<Branch> all) {
         List<Goal> goals = new ArrayList<>();
         LengthIndexedLine lil = new LengthIndexedLine(b.line);
         List<Double> positions = new ArrayList<>();
@@ -314,7 +620,15 @@ public final class JointPlanner {
             }
         }
         goals.sort(Comparator.comparingDouble(g -> g.xy.distance(origin)));
-        return goals.subList(0, Math.min(goals.size(), MAX_BRANCH_GOALS));
+        List<Goal> limited = new ArrayList<>(goals.subList(0, Math.min(goals.size(), MAX_BRANCH_GOALS)));
+        // Уже существующие узлы на ветви: вторая ветвь может закончиться в той же камере (четвёртое примыкание).
+        for (Branch child : all) {
+            if (child.parent == index && b.canJoinAt(child.parentPos)) {
+                Route.Leg leg = b.route.legs.get(b.legAt(child.parentPos));
+                limited.add(new Goal(child.attach, Collections.emptySet(), null, new Branch.Point(index), Angles.unit(leg.from, leg.to)));
+            }
+        }
+        return limited;
     }
 
     /** Превращает найденную трассу в ветвь; при пересечении других ветвей обрезает трассу и присоединяет к первой из них. */
@@ -341,7 +655,9 @@ public final class JointPlanner {
                 continue;
             }
             for (Coordinate c : inter.getCoordinates()) {
-                boolean atOwnAttach = j == ownParent && c.distance(route.goal.xy) < 0.05;
+                boolean sibling = ownParent >= 0 && j != ownParent && branches.get(j).parent == ownParent
+                        && branches.get(j).attach.distance(route.goal.xy) < 0.05;
+                boolean atOwnAttach = (j == ownParent || sibling) && c.distance(route.goal.xy) < 0.05;
                 if (atOwnAttach) {
                     continue;
                 }

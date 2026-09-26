@@ -1,16 +1,24 @@
 // Результат расчёта на вкладках решений: слои трасс и камер, сводка, проверка и список точек поверх общей карты.
+// Вкладки 1-3 — основные варианты (строго по данным и правилам), 4-6 — дополнительные (с допущениями), включаются фильтром.
 window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
     const PALETTE = ["#ff668c", "#7fd1ff", "#ffd166", "#80f2a3", "#c792ea", "#ff9e64", "#4dd0c8", "#f78fb3", "#a3e635", "#f472b6"];
+    const MAIN_TABS = 3;
     const format = new ol.format.GeoJSON();
     const view = map.getView();
     const shortMoney = value => (value / 1e6).toLocaleString("ru-RU", {maximumFractionDigits: 1}) + " млн ₽";
     const diameterRange = b => b.diameter_min === b.diameter_max ? `ДУ ${b.diameter_min}` : `ДУ ${b.diameter_min}–${b.diameter_max}`;
     let state = "idle";
-    let variants = [];
+    let mainVariants = [];
+    let extraVariants = [];
+    let diagnostics = [];
     let error = "";
     let currentSolution = null;
     let selectedTarget = null;
     const built = new Map();
+
+    const keyOf = number => number <= MAIN_TABS ? `v${number - 1}` : number <= 2 * MAIN_TABS ? `a${number - MAIN_TABS - 1}` : `p${number - 2 * MAIN_TABS - 1}`;
+    const variantOf = number => number <= MAIN_TABS ? mainVariants[number - 1]
+        : number <= 2 * MAIN_TABS ? extraVariants[number - MAIN_TABS - 1] : mainVariants[number - 2 * MAIN_TABS - 1]?.previous;
 
     function element(tag, className, text) {
         const node = document.createElement(tag);
@@ -19,28 +27,26 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         return node;
     }
 
-    function addLegend(key, title, color, layer, group) {
+    function addLegend(key, title, color, layer, group, optional) {
         const row = element("label", "legend-row");
         row.dataset.layer = key;
         row.hidden = true;
         const check = document.createElement("input");
         check.type = "checkbox";
-        check.checked = true;
+        check.checked = !optional;
         check.setAttribute("aria-label", title);
         check.addEventListener("change", () => layer.setVisible(check.checked));
         const swatch = element("span", "swatch");
         swatch.style.backgroundColor = color;
         row.append(check, swatch, element("span", "", title));
         legendItems.append(row);
-        group.push({layer, row});
+        group.push({layer, row, optional: Boolean(optional)});
     }
 
-    function build(index) {
-        const variant = variants[index];
+    function build(key, variant) {
         const group = [];
         const features = format.readFeatures(variant.routes, {dataProjection: "EPSG:4326", featureProjection: "EPSG:3857"});
-        const ids = [];
-        variant.branches.forEach(b => ids.push(String(b.target_id)));
+        const ids = variant.branches.map(b => String(b.target_id));
         const colorOf = id => PALETTE[Math.max(0, ids.indexOf(String(id))) % PALETTE.length];
         const casing = width => new ol.style.Style({stroke: new ol.style.Stroke({color: "#0d1117", width: width + 3.5, lineCap: "round"})});
         const cache = new Map();
@@ -49,25 +55,25 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
             style: feature => {
                 const id = String(feature.get("target_id"));
                 const width = Math.min(9, 3 + feature.get("diameter") / 60);
-                const key = `${id}:${width}:${id === selectedTarget}`;
-                if (!cache.has(key)) {
+                const styleKey = `${id}:${width}:${id === selectedTarget}:${feature.get("laying_method")}`;
+                if (!cache.has(styleKey)) {
                     const color = colorOf(id);
                     const styles = [casing(width), new ol.style.Style({stroke: new ol.style.Stroke({
                         color, width, lineCap: "round", lineDash: feature.get("laying_method") === "special" ? [10, 8] : undefined})})];
                     if (id === selectedTarget) styles.unshift(new ol.style.Style({stroke: new ol.style.Stroke({color: "#ffffff", width: width + 8, lineCap: "round"})}));
-                    cache.set(key, styles);
+                    cache.set(styleKey, styles);
                 }
-                return cache.get(key);
+                return cache.get(styleKey);
             }});
         map.addLayer(routeLayer);
-        addLegend(`plan-routes-${index}`, "Новые трассы (толщина — ДУ)", "#ff668c", routeLayer, group);
+        addLegend(`plan-routes-${key}`, "Новые трассы (толщина — ДУ)", "#ff668c", routeLayer, group);
         const chamberLayer = new ol.layer.Vector({
             source: new ol.source.Vector({wrapX: false, features: format.readFeatures(variant.chambers,
                 {dataProjection: "EPSG:4326", featureProjection: "EPSG:3857"})}), zIndex: 550, visible: false,
             style: new ol.style.Style({image: new ol.style.RegularShape({points: 4, radius: 8, angle: Math.PI / 4,
                 fill: new ol.style.Fill({color: "#ffffff"}), stroke: new ol.style.Stroke({color: "#111820", width: 2})})})});
         map.addLayer(chamberLayer);
-        addLegend(`plan-chambers-${index}`, "Новые камеры и врезки", "#ffffff", chamberLayer, group);
+        addLegend(`plan-chambers-${key}`, "Новые камеры и врезки", "#ffffff", chamberLayer, group);
         const points = variant.unconnected.map(item => new ol.Feature({
             geometry: new ol.geom.Point(ol.proj.fromLonLat(item.coordinates)),
             target_id: item.id, flow_tph: item.flow_tph, reason: item.reason}));
@@ -79,8 +85,17 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
                 text: new ol.style.Text({text: String(feature.get("target_id")), offsetY: -22, font: "600 14px sans-serif",
                     fill: new ol.style.Fill({color: "#ffd0d0"}), stroke: new ol.style.Stroke({color: "#111820", width: 4})})})});
         map.addLayer(badLayer);
-        addLegend(`plan-unconnected-${index}`, "Не подключены", "#ff3b3b", badLayer, group);
-        built.set(index, {group, routeLayer, points, features, colorOf});
+        addLegend(`plan-unconnected-${key}`, "Не подключены", "#ff3b3b", badLayer, group);
+        if (variant.previous) {
+            // Прежняя структура (до перестройки цепочек): тонкий серый пунктир поверх решения, по умолчанию выключен.
+            const old = format.readFeatures(variant.previous.routes, {dataProjection: "EPSG:4326", featureProjection: "EPSG:3857"});
+            const oldLayer = new ol.layer.Vector({
+                source: new ol.source.Vector({features: old, wrapX: false}), zIndex: 440, visible: false,
+                style: new ol.style.Style({stroke: new ol.style.Stroke({color: "#e8e8e8", width: 2.5, lineDash: [6, 6], lineCap: "round"})})});
+            map.addLayer(oldLayer);
+            addLegend(`plan-previous-${key}`, "Прежняя структура (пунктир)", "#e8e8e8", oldLayer, group, true);
+        }
+        built.set(key, {group, routeLayer, points, features, colorOf});
     }
 
     function stat(parent, label, value, wide, tone) {
@@ -89,15 +104,15 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         parent.append(cell);
     }
 
-    function select(index, targetId) {
+    function select(key, targetId) {
         selectedTarget = targetId === null ? null : String(targetId);
-        built.get(index).routeLayer.changed();
+        built.get(key).routeLayer.changed();
         summaryElement.querySelectorAll(".plan-item").forEach(item => {
             item.classList.toggle("active", item.dataset.target === selectedTarget);
         });
     }
 
-    function branchItem(index, b, colorOf) {
+    function branchItem(key, b, colorOf) {
         const item = element("button", "plan-item");
         item.type = "button";
         item.dataset.target = String(b.target_id);
@@ -106,11 +121,11 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         const text = element("span", "plan-item-text");
         text.append(element("strong", "", `Точка ${b.target_id} · ${b.flow_tph} т/ч`),
             element("span", "plan-item-meta", `${diameterRange(b)} · ${b.length.toLocaleString("ru-RU")} м · ${shortMoney(b.cost)}`),
-            element("span", "plan-item-meta", `Подключение: ${b.connection}`));
+            element("span", "plan-item-meta", `Подключение: ${b.connection}${b.fallback_approach ? " · запасной подход к зданию" : ""}`));
         item.append(swatch, text);
         item.addEventListener("click", () => {
-            select(index, b.target_id);
-            const own = built.get(index).features.filter(f => String(f.get("target_id")) === String(b.target_id));
+            select(key, b.target_id);
+            const own = built.get(key).features.filter(f => String(f.get("target_id")) === String(b.target_id));
             const extent = ol.extent.createEmpty();
             own.forEach(f => ol.extent.extend(extent, f.getGeometry().getExtent()));
             if (!ol.extent.isEmpty(extent)) view.fit(extent, {padding: [70, 70, 70, 70], maxZoom: 18, duration: 350});
@@ -118,10 +133,41 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         return item;
     }
 
+    // Что изменила перестройка цепочек: показатели до и после и список целей с новым подключением.
+    function renderChanges(number, variant) {
+        const finalVariant = number <= MAIN_TABS ? variant : number > 2 * MAIN_TABS ? mainVariants[number - 2 * MAIN_TABS - 1] : null;
+        if (!finalVariant || !finalVariant.previous) return;
+        const old = finalVariant.previous;
+        const box = element("div", "plan-assumptions");
+        box.append(element("strong", "", "Перестройка цепочек"));
+        const line = (label, before, after) => box.append(element("div", "plan-item-meta", `${label}: ${before} → ${after}`));
+        line("Длина труб", `${old.new_network_length.toLocaleString("ru-RU", {maximumFractionDigits: 0})} м`,
+            `${finalVariant.new_network_length.toLocaleString("ru-RU", {maximumFractionDigits: 0})} м`);
+        line("Строительство", shortMoney(old.construction_cost), shortMoney(finalVariant.construction_cost));
+        line("Показатель S", String(old.score), String(finalVariant.score));
+        const changes = finalVariant.changes || [];
+        if (changes.length) {
+            box.append(element("div", "plan-item-meta", `Изменилось подключение у ${changes.length} точек:`));
+            const list = element("ul", "warnings");
+            changes.forEach(c => list.append(element("li", "", `Точка ${c.target_id}: было ${c.before}, стало ${c.after}`)));
+            box.append(list);
+        } else {
+            box.append(element("div", "plan-item-meta", "Подключение точек не изменилось, поменялись места врезок и ход трасс."));
+        }
+        if (number <= MAIN_TABS) {
+            box.append(element("div", "plan-item-meta", "Прежнюю структуру можно включить пунктиром в легенде или открыть на вкладке «Было»."));
+        }
+        summaryElement.append(box);
+    }
+
     function render(number) {
-        summaryElement.replaceChildren(element("h2", "", `РЕШЕНИЕ НОМЕР ${number}`));
+        const additional = number > MAIN_TABS && number <= 2 * MAIN_TABS;
+        const previousTab = number > 2 * MAIN_TABS;
+        summaryElement.replaceChildren(element("h2", "", previousTab
+            ? `ПРЕЖНЯЯ ВЕРСИЯ ${number - 2 * MAIN_TABS}` : additional
+            ? `ДОПОЛНИТЕЛЬНЫЙ ВАРИАНТ ${number - MAIN_TABS}` : `РЕШЕНИЕ НОМЕР ${number}`));
         if (state === "loading") {
-            summaryElement.append(element("p", "plan-note", "Идёт расчёт вариантов. Первый расчёт файла занимает несколько минут, повторный быстрее."));
+            summaryElement.append(element("p", "plan-note", "Загружаем дороги и считаем варианты. Первый расчёт файла занимает около двух минут, повторный быстрее."));
             return;
         }
         if (state === "error") {
@@ -129,14 +175,29 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
             return;
         }
         if (state !== "ready") return;
-        const index = number - 1;
-        const variant = variants[index];
+        const key = keyOf(number);
+        const variant = variantOf(number);
         if (!variant) {
-            summaryElement.append(element("p", "plan-note",
-                "Существенно отличающегося варианта для этого набора данных не найдено: остальные стратегии дали почти ту же сеть."));
+            summaryElement.append(element("p", "plan-note", previousTab
+                ? "Перестройка цепочек не изменила это решение, прежней версии нет."
+                : additional
+                ? "Вариантов с допущениями, дающих лучший или иной результат, для этого набора данных не найдено."
+                : "Существенно отличающегося варианта для этого набора данных не найдено: остальные стратегии дали почти ту же сеть."));
             return;
         }
+        if (previousTab) {
+            summaryElement.append(element("p", "plan-note", "Структура сети до перестройки цепочек. Итоговое решение — на вкладке «Решение " + (number - 2 * MAIN_TABS) + "»."));
+        }
         summaryElement.append(element("p", "plan-note", variant.strategy + "."));
+        if (variant.assumptions.length) {
+            const box = element("div", "plan-assumptions");
+            box.append(element("strong", "", "Допущения этого варианта"));
+            const list = element("ul", "warnings");
+            variant.assumptions.forEach(a => list.append(element("li", "", a)));
+            box.append(list);
+            summaryElement.append(box);
+        }
+        renderChanges(number, variant);
         const stats = element("div", "plan-stats");
         stat(stats, "Подключено", `${variant.connected} из ${variant.targets}`);
         stat(stats, "Длина труб", `${variant.new_network_length.toLocaleString("ru-RU", {maximumFractionDigits: 0})} м`);
@@ -160,7 +221,7 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         }
         summaryElement.append(element("h3", "plan-heading", "Подключённые точки"));
         const list = element("div", "plan-list");
-        variant.branches.forEach(b => list.append(branchItem(index, b, built.get(index).colorOf)));
+        variant.branches.forEach(b => list.append(branchItem(key, b, built.get(key).colorOf)));
         summaryElement.append(list);
         if (variant.unconnected.length) {
             summaryElement.append(element("h3", "plan-heading bad", "Не удалось подключить"));
@@ -174,12 +235,33 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
                 text.append(element("strong", "", `Точка ${entry.id} · ${entry.flow_tph} т/ч`), element("span", "plan-item-meta", entry.reason));
                 item.append(swatch, text);
                 item.addEventListener("click", () => {
-                    select(index, null);
-                    view.animate({center: built.get(index).points[i].getGeometry().getCoordinates(), zoom: 18, duration: 350});
+                    select(key, null);
+                    view.animate({center: built.get(key).points[i].getGeometry().getCoordinates(), zoom: 18, duration: 350});
                 });
                 bad.append(item);
             });
             summaryElement.append(bad);
+        }
+        if (diagnostics.length) {
+            const details = element("details", "plan-violations");
+            details.append(element("summary", "", "Замечания к расчёту"));
+            const notes = element("ul", "warnings");
+            diagnostics.forEach(x => notes.append(element("li", "", x)));
+            details.append(notes);
+            summaryElement.append(details);
+        }
+    }
+
+    // Дороги OpenStreetMap берутся из уже загруженного в браузере набора; без них расчёт идёт по дорогам из файла.
+    async function roadsBlob() {
+        const dataset = window.workingDataset;
+        if (!dataset) return null;
+        try {
+            const snapshot = await dataset.load();
+            if (snapshot.status !== "ready") return null;
+            return new Blob([JSON.stringify(dataset.getRoads())], {type: "application/geo+json"});
+        } catch (e) {
+            return null;
         }
     }
 
@@ -189,10 +271,17 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         try {
             const body = new FormData();
             body.append("file", file);
+            const roads = await roadsBlob();
+            if (roads) body.append("roads", roads, "roads.geojson");
             const response = await fetch("/api/plan", {method: "POST", body});
             if (!response.ok) throw new Error(await response.text());
-            variants = (await response.json()).variants;
-            variants.forEach((_, index) => build(index));
+            const result = await response.json();
+            mainVariants = result.variants;
+            extraVariants = result.additional || [];
+            diagnostics = result.diagnostics || [];
+            mainVariants.forEach((v, i) => build(`v${i}`, v));
+            extraVariants.forEach((v, i) => build(`a${i}`, v));
+            mainVariants.forEach((v, i) => { if (v.previous) build(`p${i}`, v.previous); });
             state = "ready";
             enableExport();
         } catch (e) {
@@ -203,15 +292,16 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         show();
     }
 
-    // Выгрузка всех вариантов в GeoJSON по разделу 7 приложения.
+    // Выгрузка в GeoJSON по разделу 7 приложения: основные варианты, а с включённым фильтром и дополнительные.
     function enableExport() {
         const button = document.getElementById("exportButton");
         button.disabled = false;
-        button.title = "Выгрузить все варианты в GeoJSON";
+        button.title = "Выгрузить варианты в GeoJSON";
         button.onclick = async () => {
             button.disabled = true;
             try {
-                const response = await fetch("/api/plan/export");
+                const extra = document.getElementById("additionalToggle").checked;
+                const response = await fetch(`/api/plan/export?additional=${extra}`);
                 if (!response.ok) throw new Error(await response.text());
                 const url = URL.createObjectURL(await response.blob());
                 const link = document.createElement("a");
@@ -232,19 +322,19 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
     let fitted = false;
     function show() {
         selectedTarget = null;
-        const index = currentSolution === null ? -1 : currentSolution - 1;
-        for (const [i, entry] of built) {
-            entry.group.forEach(({layer, row}) => {
-                const visible = i === index;
-                layer.setVisible(visible);
+        const key = currentSolution === null ? null : keyOf(currentSolution);
+        for (const [k, entry] of built) {
+            entry.group.forEach(({layer, row, optional}) => {
+                const visible = k === key;
+                row.querySelector("input").checked = !optional;
+                layer.setVisible(visible && !optional);
                 row.hidden = !visible;
-                row.querySelector("input").checked = true;
             });
         }
-        if (currentSolution !== null && state === "ready" && built.has(index) && !fitted) {
+        if (currentSolution !== null && state === "ready" && built.has(key) && !fitted) {
             fitted = true;
             const extent = ol.extent.createEmpty();
-            built.get(index).group.forEach(({layer}) => ol.extent.extend(extent, layer.getSource().getExtent()));
+            built.get(key).group.forEach(({layer}) => ol.extent.extend(extent, layer.getSource().getExtent()));
             if (!ol.extent.isEmpty(extent)) {
                 const wide = map.getSize()[0] >= 650;
                 view.fit(extent, {padding: wide ? [50, 270, 50, 70] : [200, 30, 50, 30], maxZoom: 18});

@@ -17,9 +17,17 @@ public final class Obstacle {
     public final boolean widthUnknown;
     /** Ось дороги превращена в расчётный полигон по ширине (это модель, а не измеренная граница проезжей части). */
     public final boolean derivedFromCenterline;
+    /** Ширина полосы принята по классу дороги, а не взята из данных: результат с таким проходом — дополнительный вариант. */
+    public final boolean assumedWidth;
 
     Obstacle(int index, Id id, Rules.RestrictionRule rule, Geometry geometry, double envelopeWidth, String source,
              boolean widthUnknown, boolean derivedFromCenterline) {
+        this(index, id, rule, geometry, envelopeWidth, source, widthUnknown, derivedFromCenterline, false);
+    }
+
+    Obstacle(int index, Id id, Rules.RestrictionRule rule, Geometry geometry, double envelopeWidth, String source,
+             boolean widthUnknown, boolean derivedFromCenterline, boolean assumedWidth) {
+        this.assumedWidth = assumedWidth;
         this.index = index;
         this.id = id;
         this.rule = rule;

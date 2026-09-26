@@ -46,7 +46,15 @@ public final class ObstacleSet {
     /** Наибольший axisDistance среди ограничений для каждого ДУ: радиус запроса к индексу. */
     private final double[] reach = new double[Rules.DN.length];
 
+    /** Зоны и графы считаются по группам диаметров (разница отступов внутри группы — сантиметры, её перекрывает запас). */
+    private final boolean bucketed;
+
     public ObstacleSet(List<Obstacle> obstacles, RuleSet rules) {
+        this(obstacles, rules, false);
+    }
+
+    public ObstacleSet(List<Obstacle> obstacles, RuleSet rules, boolean bucketed) {
+        this.bucketed = bucketed;
         this.obstacles = new ArrayList<>(obstacles);
         this.rules = rules;
         for (Obstacle o : this.obstacles) {
@@ -58,6 +66,30 @@ public final class ObstacleSet {
         index.build();
     }
 
+    private final ConcurrentHashMap<Integer, PreparedGeometry> preparedGeometries = new ConcurrentHashMap<>();
+
+    /** Подготовленная геометрия самого ограничения (для быстрых проверок пересечения). */
+    public PreparedGeometry prepared(Obstacle o) {
+        return preparedGeometries.computeIfAbsent(o.index, k -> PreparedGeometryFactory.prepare(o.geometry));
+    }
+
+    /**
+     * Диаметр, по которому строятся зоны для ДУ dn: при группировке — наибольший в группе (до 150, до 300, до 400),
+     * поэтому маршрут, допустимый для группы, допустим и для любого её диаметра. Без группировки — сам dn.
+     */
+    public int zoneDn(int dn) {
+        if (!bucketed) {
+            return dn;
+        }
+        if (dn <= 150) {
+            return 150;
+        }
+        if (dn <= 300) {
+            return 300;
+        }
+        return dn <= 400 ? 400 : dn;
+    }
+
     public List<Obstacle> all() {
         return obstacles;
     }
@@ -66,7 +98,7 @@ public final class ObstacleSet {
     @SuppressWarnings("unchecked")
     public List<Obstacle> near(Envelope env, int dn) {
         Envelope query = new Envelope(env);
-        query.expandBy(reach[Rules.indexOfDn(dn)] + rules.geometryEps);
+        query.expandBy(reach[Rules.indexOfDn(zoneDn(dn))] + rules.geometryEps);
         return (List<Obstacle>) index.query(query);
     }
 
@@ -76,11 +108,12 @@ public final class ObstacleSet {
      * превышает 0,03 % радиуса, то есть остаётся меньше запаса.
      */
     public Zone zone(Obstacle o, int dn) {
-        long key = ((long) o.index << 8) | Rules.indexOfDn(dn);
+        final int zdn = zoneDn(dn);
+        long key = ((long) o.index << 8) | Rules.indexOfDn(zdn);
         return zones.computeIfAbsent(key, k -> {
             BufferParameters p = new BufferParameters(rules.bufferQuadrantSegments, BufferParameters.CAP_ROUND,
                     BufferParameters.JOIN_ROUND, 5.0);
-            return new Zone(BufferOp.bufferOp(o.geometry, o.axisDistance(dn) + rules.geometryEps, p));
+            return new Zone(BufferOp.bufferOp(o.geometry, o.axisDistance(zdn) + rules.geometryEps, p));
         });
     }
 
@@ -112,7 +145,8 @@ public final class ObstacleSet {
 
     private final ConcurrentHashMap<Integer, Raster> rasters = new ConcurrentHashMap<>();
 
-    private Raster raster(int dn) {
+    private Raster raster(int requestedDn) {
+        final int dn = zoneDn(requestedDn);
         return rasters.computeIfAbsent(dn, k -> {
             Envelope all = new Envelope();
             List<Zone> list = new ArrayList<>();
