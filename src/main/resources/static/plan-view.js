@@ -18,9 +18,8 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
     let selectedTarget = null;
     const built = new Map();
 
-    const keyOf = number => number <= MAIN_TABS ? `v${number - 1}` : number <= 2 * MAIN_TABS ? `a${number - MAIN_TABS - 1}` : `p${number - 2 * MAIN_TABS - 1}`;
-    const variantOf = number => number <= MAIN_TABS ? mainVariants[number - 1]
-        : number <= 2 * MAIN_TABS ? extraVariants[number - MAIN_TABS - 1] : mainVariants[number - 2 * MAIN_TABS - 1]?.previous;
+    const keyOf = number => number <= MAIN_TABS ? `v${number - 1}` : `a${number - MAIN_TABS - 1}`;
+    const variantOf = number => number <= MAIN_TABS ? mainVariants[number - 1] : extraVariants[number - MAIN_TABS - 1];
 
     function element(tag, className, text) {
         const node = document.createElement(tag);
@@ -88,15 +87,6 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
                     fill: new ol.style.Fill({color: "#ffd0d0"}), stroke: new ol.style.Stroke({color: "#111820", width: 4})})})});
         map.addLayer(badLayer);
         addLegend(`plan-unconnected-${key}`, "Не подключены", "#ff3b3b", badLayer, group);
-        if (variant.previous) {
-            // Прежняя структура (до перестройки цепочек): тонкий серый пунктир поверх решения, по умолчанию выключен.
-            const old = format.readFeatures(variant.previous.routes, {dataProjection: "EPSG:4326", featureProjection: "EPSG:3857"});
-            const oldLayer = new ol.layer.Vector({
-                source: new ol.source.Vector({features: old, wrapX: false}), zIndex: 440, visible: false,
-                style: new ol.style.Style({stroke: new ol.style.Stroke({color: "#e8e8e8", width: 2.5, lineDash: [6, 6], lineCap: "round"})})});
-            map.addLayer(oldLayer);
-            addLegend(`plan-previous-${key}`, "Прежняя структура (пунктир)", "#e8e8e8", oldLayer, group, true);
-        }
         built.set(key, {group, routeLayer, points, features, colorOf});
     }
 
@@ -135,39 +125,10 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         return item;
     }
 
-    // Что изменила перестройка цепочек: показатели до и после и список целей с новым подключением.
-    function renderChanges(number, variant) {
-        const finalVariant = number <= MAIN_TABS ? variant : number > 2 * MAIN_TABS ? mainVariants[number - 2 * MAIN_TABS - 1] : null;
-        if (!finalVariant || !finalVariant.previous) return;
-        const old = finalVariant.previous;
-        const box = element("div", "plan-assumptions");
-        box.append(element("strong", "", "Перестройка цепочек"));
-        const line = (label, before, after) => box.append(element("div", "plan-item-meta", `${label}: ${before} → ${after}`));
-        line("Длина труб", `${old.new_network_length.toLocaleString("ru-RU", {maximumFractionDigits: 0})} м`,
-            `${finalVariant.new_network_length.toLocaleString("ru-RU", {maximumFractionDigits: 0})} м`);
-        line("Строительство", shortMoney(old.construction_cost), shortMoney(finalVariant.construction_cost));
-        line("Показатель S", String(old.score), String(finalVariant.score));
-        const changes = finalVariant.changes || [];
-        if (changes.length) {
-            box.append(element("div", "plan-item-meta", `Изменилось подключение у ${changes.length} точек:`));
-            const list = element("ul", "warnings");
-            changes.forEach(c => list.append(element("li", "", `Точка ${c.target_id}: было ${c.before}, стало ${c.after}`)));
-            box.append(list);
-        } else {
-            box.append(element("div", "plan-item-meta", "Подключение точек не изменилось, поменялись места врезок и ход трасс."));
-        }
-        if (number <= MAIN_TABS) {
-            box.append(element("div", "plan-item-meta", "Прежнюю структуру можно включить пунктиром в легенде или открыть на вкладке «Было»."));
-        }
-        summaryElement.append(box);
-    }
-
     function render(number) {
         const additional = number > MAIN_TABS && number <= 2 * MAIN_TABS;
-        const previousTab = number > 2 * MAIN_TABS;
-        summaryElement.replaceChildren(element("h2", "", previousTab
-            ? `ПРЕЖНЯЯ ВЕРСИЯ ${number - 2 * MAIN_TABS}` : additional
-            ? `ДОПОЛНИТЕЛЬНЫЙ ВАРИАНТ ${number - MAIN_TABS}` : `РЕШЕНИЕ НОМЕР ${number}`));
+        summaryElement.replaceChildren(element("h2", "", additional
+            ?`ДОПОЛНИТЕЛЬНЫЙ ВАРИАНТ ${number - MAIN_TABS}` : `РЕШЕНИЕ НОМЕР ${number}`));
         if (state === "loading") {
             summaryElement.append(element("p", "plan-note", progressText || "Загружаем дороги и ставим расчёт в очередь."));
             summaryElement.append(element("p", "plan-note", "Первый расчёт файла занимает около трёх минут, повторный быстрее. Страницу можно не закрывать: расчёт идёт на сервере."));
@@ -181,15 +142,10 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
         const key = keyOf(number);
         const variant = variantOf(number);
         if (!variant) {
-            summaryElement.append(element("p", "plan-note", previousTab
-                ? "Перестройка цепочек не изменила это решение, прежней версии нет."
-                : additional
+            summaryElement.append(element("p", "plan-note", additional
                 ? "Вариантов с допущениями, дающих лучший или иной результат, для этого набора данных не найдено."
                 : "Существенно отличающегося варианта для этого набора данных не найдено: остальные стратегии дали почти ту же сеть."));
             return;
-        }
-        if (previousTab) {
-            summaryElement.append(element("p", "plan-note", "Структура сети до перестройки цепочек. Итоговое решение — на вкладке «Решение " + (number - 2 * MAIN_TABS) + "»."));
         }
         summaryElement.append(element("p", "plan-note", variant.strategy + "."));
         if (variant.assumptions.length) {
@@ -200,7 +156,6 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
             box.append(list);
             summaryElement.append(box);
         }
-        renderChanges(number, variant);
         const stats = element("div", "plan-stats");
         stat(stats, "Подключено", `${variant.connected} из ${variant.targets}`);
         stat(stats, "Длина труб", `${variant.new_network_length.toLocaleString("ru-RU", {maximumFractionDigits: 0})} м`);
@@ -299,7 +254,6 @@ window.mountPlan = function mountPlan(map, file, legendItems, summaryElement) {
             diagnostics = result.diagnostics || [];
             mainVariants.forEach((v, i) => build(`v${i}`, v));
             extraVariants.forEach((v, i) => build(`a${i}`, v));
-            mainVariants.forEach((v, i) => { if (v.previous) build(`p${i}`, v.previous); });
             state = "ready";
             enableExport();
         } catch (e) {

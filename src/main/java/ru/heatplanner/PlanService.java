@@ -161,43 +161,7 @@ public class PlanService {
         return fc;
     }
 
-    /** Как подключена каждая цель: к сети или к ветви другой точки. */
-    private static Map<String, String> attachments(JointPlanner.Solution s) {
-        Map<String, String> out = new LinkedHashMap<>();
-        for (Branch b : s.branches) {
-            String what = b.parent >= 0 ? "в ветвь точки " + s.branches.get(b.parent).target.id.value()
-                    : (b.existing.kind == Goals.Kind.NEW_CHAMBER ? "в существующую сеть (новая камера)" : "в существующую камеру");
-            out.put(String.valueOf(b.target.id.value()), what);
-        }
-        for (JointPlanner.Unconnected u : s.unconnected) {
-            out.put(String.valueOf(u.target.id.value()), "не подключена");
-        }
-        return out;
-    }
-
-    /** Что изменилось между прежней и новой структурой: цели, у которых изменилось подключение. */
-    private static List<Object> changes(JointPlanner.Solution before, JointPlanner.Solution after) {
-        Map<String, String> a = attachments(before);
-        Map<String, String> b = attachments(after);
-        List<Object> out = new ArrayList<>();
-        for (Map.Entry<String, String> e : b.entrySet()) {
-            String was = a.get(e.getKey());
-            if (was != null && !was.equals(e.getValue())) {
-                Map<String, Object> m = new LinkedHashMap<>();
-                m.put("target_id", e.getKey());
-                m.put("before", was);
-                m.put("after", e.getValue());
-                out.add(m);
-            }
-        }
-        return out;
-    }
-
     private static Map<String, Object> describe(Variants.Variant variant, String variantId, int rank) {
-        return describe(variant, variantId, rank, true);
-    }
-
-    private static Map<String, Object> describe(Variants.Variant variant, String variantId, int rank, boolean withPrevious) {
         JointPlanner.Solution s = variant.solution;
         TreeEvaluator.Result ev = s.evaluation;
         List<Object> pieces = new ArrayList<>();
@@ -286,13 +250,6 @@ public class PlanService {
         v.put("rule_violations", ruleCount);
         v.put("structure_violations", violations.size() - ruleCount);
         v.put("violations", violations);
-        if (withPrevious && variant.previous != null) {
-            v.put("previous", describe(variant.previous, "p" + rank, rank, false));
-            v.put("changes", changes(variant.previous.solution, variant.solution));
-            @SuppressWarnings("unchecked")
-            Map<String, Object> prev = (Map<String, Object>) v.get("previous");
-            prev.put("changes", v.get("changes"));
-        }
         return v;
     }
 }

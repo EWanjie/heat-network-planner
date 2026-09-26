@@ -88,10 +88,6 @@ function setupResultTabs() {
     for (let number = 1; number <= 3; number++) {
         tabs.push({id: `extra-${number}`, label: `Доп. вариант ${number}`, solutionNumber: placeholderCount + number, additional: true});
     }
-    // Версии до перестройки цепочек: показываются фильтром «Прежние версии» для сравнения с итоговым решением.
-    for (let number = 1; number <= 3; number++) {
-        tabs.push({id: `prev-${number}`, label: `Было ${number}`, solutionNumber: 6 + number, previous: true});
-    }
     const tablist = document.getElementById("resultTabs");
     const buttons = [];
     let selectedIndex = -1;
@@ -108,7 +104,6 @@ function setupResultTabs() {
         summary.hidden = tab.solutionNumber === null;
         document.getElementById("exportButton").hidden = tab.solutionNumber === null;
         document.getElementById("additionalToggleLabel").hidden = tab.solutionNumber === null;
-        document.getElementById("previousToggleLabel").hidden = tab.solutionNumber === null;
         summary.textContent = tab.solutionNumber === null ? "" : `РЕШЕНИЕ НОМЕР ${tab.solutionNumber}`;
         document.querySelector(".statistics").scrollTop = 0;
         if (selectedIndex !== index) resetMapState();
@@ -138,17 +133,13 @@ function setupResultTabs() {
             event.preventDefault();
             select(next, true);
         });
-        button.hidden = Boolean(tab.additional || tab.previous);
+        button.hidden = Boolean(tab.additional);
         buttons.push(button);
         tablist.append(button);
     });
     document.getElementById("additionalToggle").addEventListener("change", event => {
         buttons.forEach((button, i) => { if (tabs[i].additional) button.hidden = !event.target.checked; });
         if (!event.target.checked && tabs[selectedIndex].additional) select(0);
-    });
-    document.getElementById("previousToggle").addEventListener("change", event => {
-        buttons.forEach((button, i) => { if (tabs[i].previous) button.hidden = !event.target.checked; });
-        if (!event.target.checked && tabs[selectedIndex].previous) select(0);
     });
     select(0);
     tablist.hidden = false;
