@@ -1,0 +1,38 @@
+name: docker-compose check
+# Проверяет, что сервис реально поднимается через docker-compose (требование ТЗ): сборка,
+# запуск app+db, ожидание ответа на порту 8080, логи и остановка. Ручной запуск или при пуше в эту ветку.
+on:
+  push:
+    branches: [ feature/existing-network-graph ]
+  workflow_dispatch: {}
+
+jobs:
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Собрать и поднять сервис
+        run: docker compose up -d --build
+
+      - name: Дождаться ответа приложения
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8080/ > /dev/null; then
+              echo "Приложение отвечает"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Приложение не ответило за отведённое время"
+          docker compose ps
+          docker compose logs
+          exit 1
+
+      - name: Логи (всегда, для диагностики)
+        if: always()
+        run: docker compose logs
+
+      - name: Остановить и убрать
+        if: always()
+        run: docker compose down -v
