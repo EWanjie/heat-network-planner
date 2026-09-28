@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Моделирование трасс подключения к тепловым сетям</title>
-    <link rel="stylesheet" href="/app.css?v=20260921-guard5">
-    <script src="/dataset-store.js?v=20260921-guard5" defer></script>
-    <script src="/upload.js?v=20260921-guard5" defer></script>
+    <link rel="stylesheet" href="/app.css?v=20260926-loading1">
+    <script src="/dataset-store.js?v=20260926-loading1" defer></script>
+    <script src="/upload.js?v=20260926-loading1" defer></script>
 </head>
 <body class="upload-page">
 <main class="upload-shell">
     <h1 class="upload-brand">Моделирование трасс подключения к тепловым сетям</h1>
     <p class="upload-heading">Загрузите GeoJSON файл</p>
-    <div class="upload-panel">
+    <div id="uploadPanel" class="upload-panel">
     <div id="dropZone" class="drop-zone" role="group" aria-label="Загрузка одного GeoJSON файла" aria-describedby="dropHint status">
         <div class="upload-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -26,6 +26,19 @@
     <p id="fileInfo" class="upload-file-info" hidden></p>
     <p id="status" class="status" role="status" aria-live="polite"></p>
     </div>
+    <section id="calculationPanel" class="upload-panel calculation-panel" hidden aria-labelledby="calculationTitle">
+        <div id="calculationSpinner" class="calculation-spinner" aria-hidden="true"></div>
+        <h2 id="calculationTitle">Строим схемы подключения</h2>
+        <p id="calculationFile" class="muted"></p>
+        <p id="calculationStatus" role="status" aria-live="polite">Сервер рассчитывает маршруты по загруженным данным.</p>
+        <p id="calculationElapsed" class="muted" aria-live="off"></p>
+        <div class="calculation-actions">
+            <button id="cancelCalculation" type="button">Отменить</button>
+            <button id="retryCalculation" class="primary" type="button" hidden>Повторить расчёт</button>
+            <button id="chooseAnotherFile" type="button" hidden>Выбрать другой файл</button>
+        </div>
+    </section>
 </main>
 </body>
 </html>
+

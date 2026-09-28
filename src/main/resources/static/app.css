@@ -36,6 +36,13 @@ p { line-height: 1.6; }
 .drop-zone .primary { width: 100%; padding: 15px 18px; border-radius: 10px; background: linear-gradient(100deg, #520978, #310F53); border: 0; font-weight: 400; }
 .drop-zone .primary:hover { background: linear-gradient(100deg, #64128b, #461568); }
 .upload-file-info { color: #bcb6c9; font-size: 13px; margin: 18px 0 0; }
+.calculation-panel { padding: clamp(24px, 5vw, 48px); }
+.calculation-panel h2 { font-size: clamp(20px, 3vw, 26px); margin-bottom: 14px; }
+#calculationFile { overflow-wrap: anywhere; }
+.calculation-spinner { width: 48px; height: 48px; margin: 0 auto 26px; border: 3px solid #494252; border-top-color: #8A83D1; border-radius: 50%; animation: calculation-spin 1s linear infinite; }
+.calculation-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 24px; }
+@keyframes calculation-spin { to { transform: rotate(360deg); } }
+@media(prefers-reduced-motion: reduce) { .calculation-spinner { animation: none; } }
 .upload-shell .status:empty { display: none; }
 @media(prefers-reduced-motion: reduce) { .drop-zone { transition: none; } }
 #fileInfo, #datasetName { overflow-wrap: anywhere; }

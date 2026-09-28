@@ -3,6 +3,7 @@
  * must resolve missing widths before treating them as road areas.
  */
 (function (root) {
+    const ENDPOINTS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter"];
     const HIGHWAYS = new Set(["motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link",
         "secondary", "secondary_link", "tertiary", "tertiary_link", "unclassified", "residential", "living_street", "service"]);
     function bounds(collection) {
@@ -82,18 +83,21 @@
         return features;
     }
     function create(original) {
-        const bbox = bounds(original);
+        let bbox = bounds(original);
         let state = "idle", roads = [], pending = null, error = "", fetchedAt = null;
         const listeners = new Set();
         const notify = () => listeners.forEach(fn => fn());
         function snapshot() { return {status: state, bbox: bbox?.slice() || null, count: roads.length, error, fetchedAt}; }
-        async function load() {
+        async function load(expandedBbox = null) {
             if (pending) return pending;
+            if (expandedBbox) {
+                if (!Array.isArray(expandedBbox) || expandedBbox.length !== 4 || !expandedBbox.every(Number.isFinite)) throw new Error("Некорректная область дорог.");
+                bbox = bbox ? [Math.min(bbox[0], expandedBbox[0]), Math.min(bbox[1], expandedBbox[1]), Math.max(bbox[2], expandedBbox[2]), Math.max(bbox[3], expandedBbox[3])] : expandedBbox.slice();
+                state = "idle";
+            }
             if (state === "ready") return snapshot();
             pending = Promise.resolve().then(async () => {
                 state = "loading"; error = ""; notify();
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 35000);
                 try {
                     if (!bbox) { roads = []; state = "ready"; return snapshot(); }
                     const [west, south, east, north] = bbox;
@@ -101,15 +105,26 @@
                     const areaKm2 = (east - west) * (north - south) * 111.32 ** 2 * Math.cos((south + north) * Math.PI / 360);
                     if (east - west > 180 || areaKm2 > 100) throw new Error("Территория слишком велика для демонстрационной загрузки дорог (лимит 100 км²).");
                     const query = `[out:json][timeout:25];way["highway"~"^(${[...HIGHWAYS].join("|")})$"](${south},${west},${north},${east});out geom;`;
-                    const response = await fetch("https://overpass-api.de/api/interpreter", {
-                        method: "POST", body: new URLSearchParams({data: query}), signal: controller.signal});
-                    if (!response.ok) throw new Error(`Сервис дорог OSM недоступен (HTTP ${response.status}).`);
-                    const result = await response.json();
-                    roads = convert(result, bbox, original); fetchedAt = new Date().toISOString(); state = "ready";
+                    let lastError;
+                    for (const endpoint of ENDPOINTS) {
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 35000);
+                        try {
+                            const response = await fetch(endpoint, {
+                                method: "POST", body: new URLSearchParams({data: query}), signal: controller.signal});
+                            if (!response.ok) throw new Error(`Сервис дорог OSM недоступен (HTTP ${response.status}).`);
+                            const result = await response.json();
+                            const converted = convert(result, bbox, original);
+                            roads = converted; fetchedAt = new Date().toISOString(); state = "ready";
+                            return snapshot();
+                        } catch (e) { lastError = e; }
+                        finally { clearTimeout(timeout); }
+                    }
+                    throw lastError;
                 } catch (e) {
                     state = "error";
                     error = e.name === "AbortError" ? "Сервис дорог OSM не ответил за 35 секунд." : e.message;
-                } finally { clearTimeout(timeout); pending = null; notify(); }
+                } finally { pending = null; notify(); }
                 return snapshot();
             });
             return pending;

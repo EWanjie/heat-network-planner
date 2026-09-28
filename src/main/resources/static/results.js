@@ -24,6 +24,7 @@ const MAX_PREVIEW_BYTES = 100 * 1024 * 1024;
 let resetMapState = () => {};
 let currentResultTab = "input";
 let syncRoadDemo = () => {};
+let showCalculatedVariant = () => {};
 
 function labelFor(key) {
     return key.startsWith("restriction:") ? (RESTRICTION_LABELS[key.slice(12)] || key.slice(12)) : (OBJECT_LABELS[key] || key);
@@ -66,14 +67,14 @@ function renderInputSummary(summary) {
     countsInto("typeCounts", Object.fromEntries(entries), Object.fromEntries(entries.map(([key]) => [key, labelFor(key)])));
 }
 
-function setupResultTabs() {
-    // Temporary UI placeholders. These are not calculated routes or exported results.
-    const placeholderCount = 3;
+function setupResultTabs(variants = []) {
+    const placeholderCount = variants.length;
     const tabs = [{id: "input", label: "Исходные данные", solutionNumber: null}];
     for (let number = 1; number <= placeholderCount; number++) {
         tabs.push({id: `solution-${number}`, label: placeholderCount === 1 ? "Решение" : `Решение ${number}`, solutionNumber: number});
     }
     const tablist = document.getElementById("resultTabs");
+    tablist.replaceChildren();
     const buttons = [];
     let selectedIndex = -1;
     function select(index, focus = false) {
@@ -88,9 +89,14 @@ function setupResultTabs() {
         const summary = document.getElementById("solutionSummary");
         summary.hidden = tab.solutionNumber === null;
         document.getElementById("exportButton").hidden = tab.solutionNumber === null;
-        summary.textContent = tab.solutionNumber === null ? "" : `РЕШЕНИЕ НОМЕР ${tab.solutionNumber}`;
+        summary.replaceChildren();
+        const variant = tab.solutionNumber === null ? null : variants[tab.solutionNumber - 1];
+        if (variant) renderCalculatedSummary(summary, variant);
+        document.getElementById("exportButton").disabled = !variant;
+        document.getElementById("exportButton").onclick = variant ? () => exportCalculatedVariant(variant) : null;
         document.querySelector(".statistics").scrollTop = 0;
         if (selectedIndex !== index) resetMapState();
+        showCalculatedVariant(variant);
         syncRoadDemo();
         selectedIndex = index;
         if (focus) buttons[index].focus();
@@ -133,12 +139,11 @@ function popup(properties) {
     return table;
 }
 
-function renderMap(geojson, workingDataset) {
+function renderMap(geojson) {
     const view = new ol.View({center: [0, 0], zoom: 2, minZoom: 0, maxZoom: 19,
         enableRotation: false, smoothResolutionConstraint: false});
     const tileStatus = document.getElementById("tileStatus");
-    const base = createSchematicBasemap(tileStatus);
-    const map = new ol.Map({target: "map", layers: [base], view,
+    const map = new ol.Map({target: "map", layers: [], view,
         interactions: ol.interaction.defaults.defaults({onFocusOnly: false}),
         controls: [new ol.control.Attribution({collapsible: false})]});
     const connectionPoints = new ol.source.Vector({features: new ol.format.GeoJSON().readFeatures({
@@ -214,8 +219,18 @@ function renderMap(geojson, workingDataset) {
         map.addLayer(layer);
         legendRow(key, labelFor(key), color, layer);
     }
-    syncRoadDemo = mountRoadDemo(map, workingDataset, legendItems, () => currentResultTab === "input");
-    legendRow("map", "Карта", "#737373", base);
+    const solutionSource = new ol.source.Vector({wrapX: false});
+    const solutionLayer = new ol.layer.Vector({source: solutionSource, zIndex: 600, visible: false,
+        style: new ol.style.Style({stroke: new ol.style.Stroke({color: "#d9c5ff", width: 4}),
+            image: new ol.style.Circle({radius: 6, fill: new ol.style.Fill({color: "#d9c5ff"}),
+                stroke: new ol.style.Stroke({color: "#310f53", width: 2})})})});
+    map.addLayer(solutionLayer);
+    showCalculatedVariant = variant => {
+        solutionSource.clear();
+        if (variant) solutionSource.addFeatures(new ol.format.GeoJSON().readFeatures({type: "FeatureCollection",
+            features: variant.features.filter(f => f.geometry)}, {dataProjection: "EPSG:4326", featureProjection: "EPSG:3857"}));
+        solutionLayer.setVisible(Boolean(variant));
+    };
     const popupElement = document.createElement("div");
     popupElement.className = "map-popup";
     const close = document.createElement("button");
@@ -226,7 +241,7 @@ function renderMap(geojson, workingDataset) {
     map.addOverlay(overlay);
     close.addEventListener("click", () => overlay.setPosition(undefined));
     map.on("singleclick", event => {
-        const feature = map.forEachFeatureAtPixel(event.pixel, item => item, {hitTolerance: 5, layerFilter: layer => layer !== base});
+        const feature = map.forEachFeatureAtPixel(event.pixel, item => item, {hitTolerance: 5});
         if (!feature) { overlay.setPosition(undefined); return; }
         const properties = {...feature.getProperties()};
         delete properties[feature.getGeometryName()];
@@ -285,6 +300,7 @@ function renderMap(geojson, workingDataset) {
     try {
         const data = await datasetStore.load();
         if (!data) { document.getElementById("emptyState").hidden = false; return; }
+        if (!data.planningResult?.variants?.length) { window.location.replace("/"); return; }
         // Native confirmation for reload, Back, close and navigation to upload.
         // Browsers choose the message and require prior user interaction with this page.
         window.addEventListener("beforeunload", event => {
@@ -295,7 +311,12 @@ function renderMap(geojson, workingDataset) {
         document.getElementById("datasetName").textContent = file.name;
         document.getElementById("totalObjects").textContent = summary.totalObjects.toLocaleString("ru-RU");
         renderInputSummary(summary);
-        setupResultTabs();
+        setupResultTabs(data.planningResult.variants);
+        window.planningResult = data.planningResult;
+        const calculationNote = document.createElement("p");
+        calculationNote.className = "muted";
+        calculationNote.textContent = "Расчёт выполнен по загруженному файлу.";
+        document.getElementById("inputSummary").append(calculationNote);
         document.getElementById("workspace").hidden = false;
         if (file.size > MAX_PREVIEW_BYTES) {
             document.getElementById("mapStatus").textContent = "Статистика загружена. Отображение файлов больше 100 МиБ пока не поддерживается.";
@@ -306,8 +327,7 @@ function renderMap(geojson, workingDataset) {
         // Fit only after the font and visible page layout have their final dimensions.
         await document.fonts.ready;
         await new Promise(resolve => requestAnimationFrame(resolve));
-        window.workingDataset = roadEnrichment.create(geojson);
-        resetMapState = renderMap(geojson, window.workingDataset);
+        resetMapState = renderMap(geojson);
     } catch (error) {
         if (document.getElementById("workspace").hidden) {
             document.getElementById("emptyState").hidden = false;

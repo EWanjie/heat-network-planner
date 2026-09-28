@@ -5,6 +5,84 @@ const button = document.getElementById("uploadButton");
 const status = document.getElementById("status");
 let busy = false;
 let dragDepth = 0;
+let selectedDataset = null;
+let activeCalculation = null;
+const calculationPanel = document.getElementById("calculationPanel");
+function cancelCalculation() {
+    if (!activeCalculation) return;
+    const current = activeCalculation;
+    current.cancelled = true;
+    fetch(`/api/plan/${current.id}`, {method: "DELETE", keepalive: true}).catch(() => {});
+    current.controller.abort();
+}
+document.getElementById("cancelCalculation").addEventListener("click", cancelCalculation);
+document.getElementById("retryCalculation").addEventListener("click", () => calculate(selectedDataset));
+document.getElementById("chooseAnotherFile").addEventListener("click", () => {
+    calculationPanel.hidden = true;
+    document.getElementById("uploadPanel").hidden = false;
+    document.querySelector(".upload-heading").hidden = false;
+    selectedDataset = null; setBusy(false); status.textContent = ""; fileInfo.hidden = true;
+});
+window.addEventListener("pagehide", cancelCalculation);
+window.addEventListener("beforeunload", event => {
+    if (activeCalculation) {event.preventDefault(); event.returnValue = "Данные могут не сохраниться";}
+});
+
+async function calculate(data) {
+    if (!data || activeCalculation) return;
+    setBusy(true);
+    document.getElementById("uploadPanel").hidden = true;
+    document.querySelector(".upload-heading").hidden = true;
+    calculationPanel.hidden = false;
+    const title = document.getElementById("calculationTitle"), message = document.getElementById("calculationStatus");
+    const spinner = document.getElementById("calculationSpinner"), cancel = document.getElementById("cancelCalculation");
+    const retry = document.getElementById("retryCalculation"), another = document.getElementById("chooseAnotherFile");
+    title.textContent = "Строим схемы подключения";
+    message.textContent = "Сервер рассчитывает маршруты по загруженным данным. Обычно это занимает до 30 секунд; проверка результата может потребовать ещё немного времени.";
+    document.getElementById("calculationFile").textContent = data.file.name;
+    spinner.hidden = false; cancel.hidden = false; retry.hidden = true; another.hidden = true;
+    const current = {id: crypto.randomUUID(), controller: new AbortController(), cancelled: false};
+    activeCalculation = current;
+    const started = Date.now();
+    const updateTime = () => document.getElementById("calculationElapsed").textContent = `Прошло: ${Math.floor((Date.now() - started) / 1000)} с`;
+    updateTime(); const timer = setInterval(updateTime, 1000);
+    const timeout = setTimeout(() => {
+        current.timedOut = true;
+        fetch(`/api/plan/${current.id}`, {method: "DELETE", keepalive: true}).catch(() => {});
+        current.controller.abort();
+    }, 60000);
+    try {
+        const dataset = JSON.parse(await data.file.text());
+        if (current.cancelled) throw new DOMException("Cancelled", "AbortError");
+        const response = await fetch("/api/plan", {method: "POST", headers: {"Content-Type": "application/json"}, signal: current.controller.signal,
+            body: JSON.stringify({requestId: current.id, dataset, osm: {required: false, status: "disabled"},
+                options: {maxTimeMillis: 30000, totalSearchBudget: 30000}})});
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.error || `Ошибка сервера: HTTP ${response.status}`);
+        }
+        const result = await response.json();
+        if (!Array.isArray(result.variants)) throw new Error("Сервер вернул некорректный результат расчёта.");
+        if (!result.variants.length) {
+            title.textContent = "Решение пока не найдено";
+            message.textContent = "За отведённое время не удалось построить проверенную схему. Это не означает, что подключение невозможно. Можно повторить расчёт или выбрать другой файл.";
+            return;
+        }
+        if (current.cancelled || current.timedOut) throw new DOMException("Cancelled", "AbortError");
+        await datasetStore.save(data.file, data.summary, result);
+        if (current.cancelled || current.timedOut) throw new DOMException("Cancelled", "AbortError");
+        activeCalculation = null;
+        window.location.assign("/results.html");
+    } catch (error) {
+        title.textContent = current.cancelled ? "Расчёт отменён" : "Не удалось завершить расчёт";
+        message.textContent = current.cancelled ? "Можно повторить расчёт или выбрать другой файл." : current.timedOut ?
+            "Сервер не вернул ответ за минуту. Попробуйте повторить расчёт." : error instanceof TypeError ?
+                "Нет связи с сервером. Проверьте, что приложение запущено, и повторите расчёт." : error.message;
+    } finally {
+        clearInterval(timer); clearTimeout(timeout); activeCalculation = null; setBusy(false);
+        spinner.hidden = true; cancel.hidden = true; retry.hidden = false; another.hidden = false;
+    }
+}
 
 function showError(message) {
     status.classList.add("error");
@@ -59,6 +137,11 @@ zone.addEventListener("drop", event => {
     if (!busy) acceptFiles(event.dataTransfer.files);
 });
 window.addEventListener("pageshow", () => {
+    if (activeCalculation) return;
+    calculationPanel.hidden = true;
+    document.getElementById("uploadPanel").hidden = false;
+    document.querySelector(".upload-heading").hidden = false;
+    selectedDataset = null;
     setBusy(false);
     dragDepth = 0;
     zone.classList.remove("is-dragging");
@@ -95,9 +178,8 @@ async function upload(file) {
                 response.status >= 500 ? "Сервер не смог обработать файл. Попробуйте ещё раз." : text);
         }
         const summary = await response.json();
-        status.textContent = "Готовим страницу с картой…";
-        await datasetStore.save(file, summary);
-        window.location.assign("/results.html");
+        selectedDataset = {file, summary};
+        await calculate(selectedDataset);
     } catch (error) {
         showError(error instanceof TypeError ? "Нет связи с сервером. Проверьте, что приложение запущено." : error.message);
         setBusy(false);

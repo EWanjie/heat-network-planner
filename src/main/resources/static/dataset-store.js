@@ -8,13 +8,13 @@ window.datasetStore = (() => {
             request.onerror = () => reject(new Error("Не удалось открыть хранилище браузера."));
         });
     }
-    async function save(file, summary) {
+    async function save(file, summary, planningResult = null) {
         const db = await database();
         const key = sessionStorage.getItem("datasetKey") || crypto.randomUUID();
         try {
             await new Promise((resolve, reject) => {
                 const tx = db.transaction("datasets", "readwrite");
-                tx.objectStore("datasets").put({file, summary}, key);
+                tx.objectStore("datasets").put({file, summary, planningResult}, key);
                 tx.oncomplete = resolve;
                 tx.onabort = () => reject(new Error("Недостаточно места или нет доступа к хранилищу браузера."));
                 tx.onerror = () => {};
